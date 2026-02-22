@@ -36,12 +36,12 @@ func runShareCmd(cmd *cobra.Command, args []string) {
 	runShare(defaultViper)
 }
 
-func runShare(viper *viper.Viper) {
-	if err := viper.ReadInConfig(); err != nil {
+func runShare(v *viper.Viper) {
+	if err := v.ReadInConfig(); err != nil {
 		logger.Fatal("failed to read client config", zap.Error(err))
 	}
 	var config clientConfig
-	if err := viper.Unmarshal(&config); err != nil {
+	if err := v.Unmarshal(&config); err != nil {
 		logger.Fatal("failed to parse client config", zap.Error(err))
 	}
 	if _, err := config.Config(); err != nil {

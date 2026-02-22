@@ -37,7 +37,7 @@ func runCheckUpdateCmd(cmd *cobra.Command, args []string) {
 	runCheckUpdate(defaultViper)
 }
 
-func runCheckUpdate(viper *viper.Viper) {
+func runCheckUpdate(v *viper.Viper) {
 	checker := utils.NewServerUpdateChecker(appVersion, appPlatform, appArch, appType)
 	resp, err := checker.Check()
 	if err != nil {

@@ -937,12 +937,12 @@ func runServerCmd(cmd *cobra.Command, args []string) {
 	runServer(defaultViper)
 }
 
-func runServer(viper *viper.Viper) {
-	if err := viper.ReadInConfig(); err != nil {
+func runServer(v *viper.Viper) {
+	if err := v.ReadInConfig(); err != nil {
 		logger.Fatal("failed to read server config", zap.Error(err))
 	}
 	var config serverConfig
-	if err := viper.Unmarshal(&config); err != nil {
+	if err := v.Unmarshal(&config); err != nil {
 		logger.Fatal("failed to parse server config", zap.Error(err))
 	}
 	hyConfig, err := config.Config()

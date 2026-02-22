@@ -52,12 +52,12 @@ func runSpeedtestCmd(cmd *cobra.Command, args []string) {
 	runSpeedtest(defaultViper)
 }
 
-func runSpeedtest(viper *viper.Viper) {
-	if err := viper.ReadInConfig(); err != nil {
+func runSpeedtest(v *viper.Viper) {
+	if err := v.ReadInConfig(); err != nil {
 		logger.Fatal("failed to read client config", zap.Error(err))
 	}
 	var config clientConfig
-	if err := viper.Unmarshal(&config); err != nil {
+	if err := v.Unmarshal(&config); err != nil {
 		logger.Fatal("failed to parse client config", zap.Error(err))
 	}
 	hyConfig, err := config.Config()

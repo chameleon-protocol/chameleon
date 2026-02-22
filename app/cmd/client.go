@@ -473,12 +473,12 @@ func runClientCmd(cmd *cobra.Command, args []string) {
 	runClient(defaultViper)
 }
 
-func runClient(viper *viper.Viper) {
-	if err := viper.ReadInConfig(); err != nil {
+func runClient(v *viper.Viper) {
+	if err := v.ReadInConfig(); err != nil {
 		logger.Fatal("failed to read client config", zap.Error(err))
 	}
 	var config clientConfig
-	if err := viper.Unmarshal(&config); err != nil {
+	if err := v.Unmarshal(&config); err != nil {
 		logger.Fatal("failed to parse client config", zap.Error(err))
 	}
 

@@ -32,12 +32,12 @@ func runPingCmd(cmd *cobra.Command, args []string) {
 	runPing(defaultViper, addr)
 }
 
-func runPing(viper *viper.Viper, addr string) {
-	if err := viper.ReadInConfig(); err != nil {
+func runPing(v *viper.Viper, addr string) {
+	if err := v.ReadInConfig(); err != nil {
 		logger.Fatal("failed to read client config", zap.Error(err))
 	}
 	var config clientConfig
-	if err := viper.Unmarshal(&config); err != nil {
+	if err := v.Unmarshal(&config); err != nil {
 		logger.Fatal("failed to parse client config", zap.Error(err))
 	}
 	hyConfig, err := config.Config()
