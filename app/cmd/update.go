@@ -1,10 +1,10 @@
 package cmd
 
 import (
-	"github.com/spf13/viper"
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 	"go.uber.org/zap"
 
 	"github.com/apernet/hysteria/app/v2/internal/utils"
