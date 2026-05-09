@@ -546,7 +546,7 @@ func (r *realmServerRuntime) register(ctx context.Context) (realmSession, error)
 	localAddrs := r.currentAddrs()
 	logger.Debug("realm registration started",
 		zap.String("realm", r.realmID),
-		zap.Int("addresses", len(localAddrs)))
+		zap.Strings("addresses", addrPortStrings(localAddrs)))
 	start := time.Now()
 	registerResp, err := r.client.Register(ctx, r.realmID, addrPortStrings(localAddrs))
 	if err != nil {
@@ -559,7 +559,7 @@ func (r *realmServerRuntime) register(ctx context.Context) (realmSession, error)
 		zap.String("duration", formatLogDuration(time.Since(start))))
 	logger.Info("realm registered",
 		zap.String("realm", r.realmID),
-		zap.Int("addresses", len(localAddrs)),
+		zap.Strings("addresses", addrPortStrings(localAddrs)),
 		zap.Int("ttl", sess.ttl))
 	return sess, nil
 }
@@ -674,7 +674,7 @@ func (r *realmServerRuntime) eventsLoop(ctx context.Context, sess realmSession) 
 			logger.Debug("realm punch event received",
 				zap.String("realm", r.realmID),
 				zap.String("attempt", shortAttempt(ev.Nonce)),
-				zap.Int("addresses", len(ev.Addresses)))
+				zap.Strings("addresses", ev.Addresses))
 			go r.respond(ctx, ev)
 		}
 	}
@@ -743,7 +743,7 @@ func (r *realmServerRuntime) respond(ctx context.Context, ev *realm.PunchEvent) 
 	logger.Debug("realm punch response started",
 		zap.String("realm", r.realmID),
 		zap.String("attempt", attempt),
-		zap.Int("candidates", len(peerAddrs)))
+		zap.Strings("candidates", ev.Addresses))
 	start := time.Now()
 	result, err := r.puncher.Respond(ctx, ev.Nonce, freshAddrs, peerAddrs, ev.PunchMetadata, realm.PunchConfig{
 		Timeout: r.config.PunchTimeout,

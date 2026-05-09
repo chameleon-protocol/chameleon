@@ -640,7 +640,7 @@ func (c *clientConfig) realmConfig(addr *realm.Addr) (*client.Config, error) {
 	logger.Debug("realm client connect request started",
 		zap.String("realm", addr.RealmID),
 		zap.String("attempt", attempt),
-		zap.Int("addresses", len(localAddrs)))
+		zap.Strings("addresses", addrPortStrings(localAddrs)))
 	connectStart := time.Now()
 	connectResp, err := rClient.Connect(ctx, addr.RealmID, realm.ConnectRequest{
 		Addresses:     addrPortStrings(localAddrs),
@@ -652,7 +652,7 @@ func (c *clientConfig) realmConfig(addr *realm.Addr) (*client.Config, error) {
 	logger.Debug("realm client connect response received",
 		zap.String("realm", addr.RealmID),
 		zap.String("attempt", attempt),
-		zap.Int("serverAddresses", len(connectResp.Addresses)),
+		zap.Strings("serverAddresses", connectResp.Addresses),
 		zap.String("duration", formatLogDuration(time.Since(connectStart))))
 	peerAddrs, err := parseAddrPorts(connectResp.Addresses)
 	if err != nil {
@@ -661,7 +661,7 @@ func (c *clientConfig) realmConfig(addr *realm.Addr) (*client.Config, error) {
 	logger.Debug("realm client punch started",
 		zap.String("realm", addr.RealmID),
 		zap.String("attempt", attempt),
-		zap.Int("candidates", len(peerAddrs)))
+		zap.Strings("candidates", connectResp.Addresses))
 	punchStart := time.Now()
 	result, err := realm.Punch(ctx, baseConn, localAddrs, peerAddrs, connectResp.PunchMetadata, realm.PunchConfig{
 		Timeout: c.Realm.PunchTimeout,
@@ -1220,6 +1220,7 @@ func formatLogDuration(d time.Duration) string {
 
 func connectLog(info *client.HandshakeInfo, count int) {
 	logger.Info("connected to server",
+		zap.String("addr", info.ServerAddr.String()),
 		zap.Bool("udpEnabled", info.UDPEnabled),
 		zap.Uint64("tx", info.Tx),
 		zap.Int("count", count))
