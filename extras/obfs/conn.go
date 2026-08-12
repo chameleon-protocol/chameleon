@@ -19,14 +19,22 @@ type obfuscator interface {
 
 var _ net.PacketConn = (*obfsPacketConn)(nil)
 
+// bufPool hands out scratch buffers for obfuscation. A buffer per call rather
+// than one shared buffer per connection is what lets ReadFrom and WriteTo run
+// without holding a lock across the syscall: quic-go runs one sendQueue
+// goroutine per connection, so a shared buffer serializes every client on a
+// server behind a single mutex, and adding cores makes it worse rather than
+// better. Obfuscators are responsible for their own internal synchronization.
+var bufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, udpBufferSize)
+		return &b
+	},
+}
+
 type obfsPacketConn struct {
 	Conn net.PacketConn
 	Obfs obfuscator
-
-	readBuf    []byte
-	readMutex  sync.Mutex
-	writeBuf   []byte
-	writeMutex sync.Mutex
 }
 
 // udpLikePacketConn is the subset of *net.UDPConn methods that quic-go relies
@@ -55,10 +63,8 @@ type obfsPacketConnUDP struct {
 // obfuscation/deobfuscation.
 func wrapPacketConn(conn net.PacketConn, ob obfuscator) net.PacketConn {
 	opc := &obfsPacketConn{
-		Conn:     conn,
-		Obfs:     ob,
-		readBuf:  make([]byte, udpBufferSize),
-		writeBuf: make([]byte, udpBufferSize),
+		Conn: conn,
+		Obfs: ob,
 	}
 	if udpConn, ok := conn.(udpLikePacketConn); ok {
 		return &obfsPacketConnUDP{
@@ -71,15 +77,15 @@ func wrapPacketConn(conn net.PacketConn, ob obfuscator) net.PacketConn {
 }
 
 func (c *obfsPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
+	bufp := bufPool.Get().(*[]byte)
+	defer bufPool.Put(bufp)
+	buf := *bufp
 	for {
-		c.readMutex.Lock()
-		n, addr, err = c.Conn.ReadFrom(c.readBuf)
+		n, addr, err = c.Conn.ReadFrom(buf)
 		if n <= 0 {
-			c.readMutex.Unlock()
 			return n, addr, err
 		}
-		n = c.Obfs.Deobfuscate(c.readBuf[:n], p)
-		c.readMutex.Unlock()
+		n = c.Obfs.Deobfuscate(buf[:n], p)
 		if n > 0 || err != nil {
 			return n, addr, err
 		}
@@ -88,10 +94,11 @@ func (c *obfsPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 }
 
 func (c *obfsPacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
-	c.writeMutex.Lock()
-	nn := c.Obfs.Obfuscate(p, c.writeBuf)
-	_, err = c.Conn.WriteTo(c.writeBuf[:nn], addr)
-	c.writeMutex.Unlock()
+	bufp := bufPool.Get().(*[]byte)
+	defer bufPool.Put(bufp)
+	buf := *bufp
+	nn := c.Obfs.Obfuscate(p, buf)
+	_, err = c.Conn.WriteTo(buf[:nn], addr)
 	if err == nil {
 		n = len(p)
 	}
