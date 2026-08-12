@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -21,10 +20,9 @@ const (
 	appDesc    = "a powerful, lightning fast and censorship resistant proxy"
 	appAuthors = "Aperture Internet Laboratory <https://github.com/apernet>"
 
-	appLogLevelEnv           = "HYSTERIA_LOG_LEVEL"
-	appLogFormatEnv          = "HYSTERIA_LOG_FORMAT"
-	appDisableUpdateCheckEnv = "HYSTERIA_DISABLE_UPDATE_CHECK"
-	appACMEDirEnv            = "HYSTERIA_ACME_DIR"
+	appLogLevelEnv  = "HYSTERIA_LOG_LEVEL"
+	appLogFormatEnv = "HYSTERIA_LOG_FORMAT"
+	appACMEDirEnv   = "HYSTERIA_ACME_DIR"
 )
 
 var (
@@ -58,10 +56,9 @@ var (
 
 // Flags
 var (
-	cfgFile            string
-	logLevel           string
-	logFormat          string
-	disableUpdateCheck bool
+	cfgFile   string
+	logLevel  string
+	logFormat string
 )
 
 var rootCmd = &cobra.Command{
@@ -119,7 +116,6 @@ func initFlags() {
 	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file")
 	rootCmd.PersistentFlags().StringVarP(&logLevel, "log-level", "l", envOrDefaultString(appLogLevelEnv, "info"), "log level")
 	rootCmd.PersistentFlags().StringVarP(&logFormat, "log-format", "f", envOrDefaultString(appLogFormatEnv, "console"), "log format")
-	rootCmd.PersistentFlags().BoolVar(&disableUpdateCheck, "disable-update-check", envOrDefaultBool(appDisableUpdateCheckEnv, false), "disable update check")
 }
 
 func initConfig() {
@@ -167,14 +163,6 @@ func initLogger() {
 func envOrDefaultString(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
-	}
-	return def
-}
-
-func envOrDefaultBool(key string, def bool) bool {
-	if v := os.Getenv(key); v != "" {
-		b, _ := strconv.ParseBool(v)
-		return b
 	}
 	return def
 }

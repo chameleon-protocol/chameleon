@@ -1652,10 +1652,6 @@ func runServer(v *viper.Viper) {
 		logger.Info("server up and running", zap.String("listen", defaultListenAddr))
 	}
 
-	if !disableUpdateCheck {
-		go runCheckUpdateServer()
-	}
-
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signalChan)

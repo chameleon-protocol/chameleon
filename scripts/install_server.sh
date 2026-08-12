@@ -30,10 +30,12 @@ SYSTEMD_SERVICES_DIR="/etc/systemd/system"
 CONFIG_DIR="/etc/hysteria"
 
 # URLs of GitHub
-REPO_URL="https://github.com/apernet/hysteria"
+REPO_URL="https://github.com/chameleon-protocol/chameleon"
 
-# URL of Hysteria 2 API
-HY2_API_BASE_URL="https://api.hy2.io/v1"
+# GitHub Releases API, used to discover the latest version.
+# We deliberately have no project-owned API endpoint: a fixed phone-home host is
+# a beacon that identifies our users and can be blocked or enumerated.
+RELEASES_API_URL="https://api.github.com/repos/chameleon-protocol/chameleon/releases/latest"
 
 # curl command line flags.
 # To using a proxy, please specify ALL_PROXY in the environ variable, such like:
@@ -890,14 +892,14 @@ get_latest_version() {
   fi
 
   local _tmpfile=$(mktemp)
-  if ! curl -sS "$HY2_API_BASE_URL/update?cver=installscript&plat=${OPERATING_SYSTEM}&arch=${ARCHITECTURE}&chan=release&side=server" -o "$_tmpfile"; then
-    error "Failed to get the latest version from Hysteria 2 API, please check your network and try again."
+  if ! curl -sS -H 'Accept: application/vnd.github+json' "$RELEASES_API_URL" -o "$_tmpfile"; then
+    error "Failed to get the latest version from GitHub, please check your network and try again."
     exit 11
   fi
 
-  local _latest_version=$(grep -oP '"lver":\s*\K"v.*?"' "$_tmpfile" | head -1)
-  _latest_version=${_latest_version#'"'}
-  _latest_version=${_latest_version%'"'}
+  # Release tags are of the form "app/vX.Y.Z"; the download path wants the "vX.Y.Z" part.
+  local _latest_version=$(grep -oP '"tag_name":\s*"\K[^"]+' "$_tmpfile" | head -1)
+  _latest_version=${_latest_version#app/}
 
   if [[ -n "$_latest_version" ]]; then
     echo "$_latest_version"
