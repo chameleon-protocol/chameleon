@@ -49,6 +49,10 @@ func TestClientConfig(t *testing.T) {
 			Salamander: clientConfigObfsSalamander{
 				Password: "cry_me_a_r1ver",
 			},
+			SalamanderV2: clientConfigObfsSalamanderV2{
+				Password: "cry_me_a_r1ver_again",
+				Realm:    "example.com",
+			},
 			Gecko: clientConfigObfsGecko{
 				Password:      "g3ck0_in_the_wall",
 				MinPacketSize: 100,

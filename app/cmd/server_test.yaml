@@ -18,6 +18,9 @@ obfs:
   type: salamander
   salamander:
     password: cry_me_a_r1ver
+  salamanderV2:
+    password: cry_me_a_r1ver_again
+    realm: example.com
   gecko:
     password: g3ck0_in_the_wall
     minPacketSize: 100

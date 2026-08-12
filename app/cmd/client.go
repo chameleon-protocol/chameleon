@@ -139,6 +139,14 @@ type clientConfigObfsSalamander struct {
 	Password string `mapstructure:"password"`
 }
 
+type clientConfigObfsSalamanderV2 struct {
+	Password string `mapstructure:"password"`
+	// Realm scopes key derivation to one deployment, so that two deployments
+	// choosing the same password do not share a key. Optional; both ends must
+	// set it identically.
+	Realm string `mapstructure:"realm"`
+}
+
 type clientConfigObfsGecko struct {
 	Password      string `mapstructure:"password"`
 	MinPacketSize int    `mapstructure:"minPacketSize"`
@@ -146,9 +154,10 @@ type clientConfigObfsGecko struct {
 }
 
 type clientConfigObfs struct {
-	Type       string                     `mapstructure:"type"`
-	Salamander clientConfigObfsSalamander `mapstructure:"salamander"`
-	Gecko      clientConfigObfsGecko      `mapstructure:"gecko"`
+	Type         string                       `mapstructure:"type"`
+	Salamander   clientConfigObfsSalamander   `mapstructure:"salamander"`
+	SalamanderV2 clientConfigObfsSalamanderV2 `mapstructure:"salamanderV2"`
+	Gecko        clientConfigObfsGecko        `mapstructure:"gecko"`
 }
 
 type clientConfigTLS struct {
@@ -340,6 +349,13 @@ func (c *clientConfig) wrapObfs(conn net.PacketConn) (net.PacketConn, error) {
 		wrapped, err := obfs.WrapPacketConnSalamander(conn, []byte(c.Obfs.Salamander.Password))
 		if err != nil {
 			return nil, configError{Field: "obfs.salamander.password", Err: err}
+		}
+		return wrapped, nil
+	case "salamander-v2":
+		wrapped, err := obfs.WrapPacketConnSalamanderV2(conn,
+			[]byte(c.Obfs.SalamanderV2.Password), c.Obfs.SalamanderV2.Realm, obfs.RoleClient)
+		if err != nil {
+			return nil, configError{Field: "obfs.salamanderV2", Err: err}
 		}
 		return wrapped, nil
 	case "gecko":
