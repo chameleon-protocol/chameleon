@@ -2,6 +2,12 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE.md)
 
+> **chameleon is a fork of [Hysteria 2](https://github.com/apernet/hysteria)** (hy2).
+> It inherits Hysteria's QUIC data plane, Brutal congestion control, and HTTP/3
+> masquerade — and deliberately **breaks wire compatibility** with it, so a chameleon
+> client cannot talk to a Hysteria server or to sing-box, and vice versa.
+> [Why, and what exactly changed.](#not-compatible-with-hysteria)
+
 **A censorship-resistant transport that keeps working when the network does not.**
 
 chameleon is a QUIC-based transport built for networks that actively interfere with
@@ -9,9 +15,6 @@ you: DPI that classifies and blocks, QoS that throttles UDP into uselessness, NA
 that refuse to hold a mapping, and paths that disappear mid-session. The goal is not
 to be the fastest proxy on a cooperative network — it is to still be connected on a
 hostile one.
-
-It is a fork of [Hysteria 2](https://github.com/apernet/hysteria) and inherits its
-QUIC data plane, Brutal congestion control, and HTTP/3 masquerade.
 
 ## Status
 
