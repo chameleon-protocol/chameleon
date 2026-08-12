@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/apernet/hysteria/app/v2/internal/utils"
+	"github.com/chameleon-protocol/chameleon/app/v2/internal/utils"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
@@ -18,7 +18,7 @@ var (
 var shareCmd = &cobra.Command{
 	Use:   "share",
 	Short: "Generate share URI",
-	Long:  "Generate a hysteria2:// URI from a client config for sharing",
+	Long:  "Generate a chameleon:// URI from a client config for sharing",
 	Run:   runShareCmd,
 }
 

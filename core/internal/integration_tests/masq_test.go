@@ -12,9 +12,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/apernet/hysteria/core/v2/internal/integration_tests/mocks"
-	"github.com/apernet/hysteria/core/v2/internal/protocol"
-	"github.com/apernet/hysteria/core/v2/server"
+	"github.com/chameleon-protocol/chameleon/core/v2/internal/integration_tests/mocks"
+	"github.com/chameleon-protocol/chameleon/core/v2/internal/protocol"
+	"github.com/chameleon-protocol/chameleon/core/v2/server"
 
 	"github.com/apernet/quic-go"
 	"github.com/apernet/quic-go/http3"
@@ -71,7 +71,7 @@ func TestServerMasquerade(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 	for k := range resp.Header {
 		// Make sure no strange headers are sent by the server
-		assert.NotContains(t, k, "Hysteria")
+		assert.NotContains(t, k, "Cham")
 	}
 
 	buf := make([]byte, 1024)

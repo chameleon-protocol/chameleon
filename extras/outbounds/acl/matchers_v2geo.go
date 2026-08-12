@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/apernet/hysteria/extras/v2/outbounds/acl/v2geo"
+	"github.com/chameleon-protocol/chameleon/extras/v2/outbounds/acl/v2geo"
 )
 
 var _ hostMatcher = (*geoipMatcher)(nil)

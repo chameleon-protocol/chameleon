@@ -4,7 +4,7 @@ import (
 	"net"
 	"sync"
 
-	coreErrs "github.com/apernet/hysteria/core/v2/errors"
+	coreErrs "github.com/chameleon-protocol/chameleon/core/v2/errors"
 )
 
 // reconnectableClientImpl is a wrapper of Client, which can reconnect when the connection is closed,

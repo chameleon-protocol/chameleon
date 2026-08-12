@@ -1,8 +1,8 @@
 // Package mimic runs Mimic (https://github.com/hack3ric/mimic) as a child
-// process for the lifetime of a Hysteria process.
+// process for the lifetime of a chameleon process.
 //
 // Mimic disguises UDP as TCP by rewriting packets in the kernel, transparently
-// to the socket. We derive its filter from the address Hysteria already knows,
+// to the socket. We derive its filter from the address chameleon already knows,
 // so users don't have to configure it separately. Installing it is still up to
 // them; whether its optional kernel module is loaded is Mimic's business, and
 // it says so itself when it needs it.
@@ -17,7 +17,7 @@ type Config struct {
 	XDPMode string
 	// Path to the mimic executable. Looked up in PATH when empty.
 	Path string
-	// ExtraArgs is passed through verbatim, for tuning Mimic has no Hysteria
+	// ExtraArgs is passed through verbatim, for tuning Mimic has no chameleon
 	// equivalent of (padding, handshake and keepalive parameters).
 	ExtraArgs []string
 }

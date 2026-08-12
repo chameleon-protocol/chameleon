@@ -10,7 +10,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/apernet/hysteria/extras/v2/realm"
+	"github.com/chameleon-protocol/chameleon/extras/v2/realm"
 )
 
 type realmPortMappingConfig struct {

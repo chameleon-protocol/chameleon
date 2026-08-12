@@ -9,10 +9,10 @@ import (
 	"net/url"
 	"time"
 
-	coreErrs "github.com/apernet/hysteria/core/v2/errors"
-	"github.com/apernet/hysteria/core/v2/internal/congestion"
-	"github.com/apernet/hysteria/core/v2/internal/protocol"
-	"github.com/apernet/hysteria/core/v2/internal/utils"
+	coreErrs "github.com/chameleon-protocol/chameleon/core/v2/errors"
+	"github.com/chameleon-protocol/chameleon/core/v2/internal/congestion"
+	"github.com/chameleon-protocol/chameleon/core/v2/internal/protocol"
+	"github.com/chameleon-protocol/chameleon/core/v2/internal/utils"
 
 	"github.com/apernet/quic-go"
 	"github.com/apernet/quic-go/http3"
@@ -138,7 +138,10 @@ func (c *clientImpl) connect() (*HandshakeInfo, error) {
 		_ = pktConn.Close()
 		return nil, coreErrs.ConnectError{Err: err}
 	}
-	if resp.StatusCode != protocol.StatusAuthOK {
+	// The status code alone no longer proves this is one of our servers: we answer
+	// a plain 200, and so does the masquerade handler. IsAuthResponse looks for a
+	// header only we set.
+	if resp.StatusCode != protocol.StatusAuthOK || !protocol.IsAuthResponse(resp.Header) {
 		_ = conn.CloseWithError(closeErrCodeProtocolError, "")
 		_ = tr.Close()
 		_ = pktConn.Close()

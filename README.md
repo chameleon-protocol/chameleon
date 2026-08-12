@@ -1,66 +1,67 @@
-# ![Hysteria 2](logo.svg)
+# chameleon
 
-[![License][1]][2] [![Release][3]][4] [![Telegram][5]][6] [![Discussions][7]][8]
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE.md)
 
-[1]: https://img.shields.io/badge/license-MIT-blue
-[2]: LICENSE.md
-[3]: https://img.shields.io/github/v/release/apernet/hysteria?style=flat-square
-[4]: https://github.com/apernet/hysteria/releases
-[5]: https://img.shields.io/badge/chat-Telegram-blue?style=flat-square
-[6]: https://t.me/hysteria_github
-[7]: https://img.shields.io/github/discussions/apernet/hysteria?style=flat-square
-[8]: https://github.com/apernet/hysteria/discussions
+**A censorship-resistant transport that keeps working when the network does not.**
 
-<h2 style="text-align: center;">Hysteria is a powerful, lightning-fast, and censorship-resistant proxy.</h2>
+chameleon is a QUIC-based transport built for networks that actively interfere with
+you: DPI that classifies and blocks, QoS that throttles UDP into uselessness, NATs
+that refuse to hold a mapping, and paths that disappear mid-session. The goal is not
+to be the fastest proxy on a cooperative network — it is to still be connected on a
+hostile one.
 
-### [Get Started](https://v2.hysteria.network/)
+It is a fork of [Hysteria 2](https://github.com/apernet/hysteria) and inherits its
+QUIC data plane, Brutal congestion control, and HTTP/3 masquerade.
 
-### [中文文档](https://v2.hysteria.network/zh/)
+## Status
 
-### [Hysteria 1.x (legacy)](https://v1.hysteria.network/)
+**Early. Not ready for production, and not yet a mesh.**
 
----
+What works today is what Hysteria 2 already did: a fast QUIC proxy with SOCKS5 /
+HTTP / TUN / TProxy / redirect / port-forwarding inbounds, Salamander and Gecko
+obfuscation, and UDP hole punching via the `realm` rendezvous.
 
-<div class="feature-grid">
-  <div>
-    <h3>🛠️ Jack of all trades</h3>
-    <p>Wide range of modes including SOCKS5, HTTP Proxy, TCP/UDP Forwarding, Linux TProxy, TUN - with more features being added constantly.</p>
-  </div>
+What we are building toward is a Tailscale-shaped overlay: peers that find each
+other, survive endpoint changes without dropping the session, and fall back through
+progressively less pleasant paths — direct UDP, port hopping, TCP, relay — rather
+than failing outright. See [`docs/research/architecture.md`](docs/research/architecture.md)
+for the architecture study, the reviewed design alternatives, and the staged roadmap.
 
-  <div>
-    <h3>⚡ Blazing fast</h3>
-    <p>Powered by a customized QUIC protocol, Hysteria is designed to deliver unparalleled performance over unreliable and lossy networks.</p>
-  </div>
+## Not compatible with Hysteria
 
-  <div>
-    <h3>✊ Censorship resistant</h3>
-    <p>The protocol masquerades as standard HTTP/3 traffic, making it very difficult for censors to detect and block without widespread collateral damage.</p>
-  </div>
-  
-  <div>
-    <h3>💻 Cross-platform</h3>
-    <p>We have builds for every major platform and architecture. Deploy anywhere & use everywhere. Not to mention the long list of 3rd party apps.</p>
-  </div>
+chameleon deliberately breaks wire compatibility with upstream Hysteria and with
+third-party implementations such as sing-box. The identifiers that made them
+interoperable — the `Hysteria-*` authentication headers, the non-standard `233`
+status code, the `hysteria2://` URI scheme — are also exactly what a censor greps
+for after buying a subscription. They are gone.
 
-  <div>
-    <h3>🔗 Easy integration</h3>
-    <p>With built-in support for custom authentication, traffic statistics & access control, Hysteria is easy to integrate into your infrastructure.</p>
-  </div>
-  
-  <div>
-    <h3>🤗 Chill and supportive</h3>
-    <p>We have well-documented specifications and code for developers to contribute and/or build their own apps. And a helpful community, too.</p>
-  </div>
-</div>
+| | Hysteria 2 | chameleon |
+|---|---|---|
+| Auth headers | `Hysteria-Auth`, `Hysteria-UDP`, `Hysteria-CC-RX`, `Hysteria-Padding` | `Cham-Auth`, `Cham-UDP`, `Cham-CC-RX`, `Cham-Padding` |
+| Auth success | `233 HyOK` | plain `200` with `Cham-UDP` present |
+| Auth `:host:` | `hysteria` | `chameleon` |
+| URI scheme | `hysteria2://`, `hy2://` | `chameleon://`, `chm://` |
+| Config dir | `/etc/hysteria`, `$HOME/.hysteria` | `/etc/chameleon`, `$HOME/.chameleon` |
+| Env prefix | `HYSTERIA_*` | `CHAMELEON_*` |
 
----
+Renaming these constants only moves the target — they are still fixed strings.
+Deriving them from the pre-shared key is the real fix, and is on the roadmap.
 
-**If you find Hysteria useful, consider giving it a ⭐️!**
+chameleon also does not phone home. Upstream's update check against `api.hy2.io`
+has been removed: a fixed endpoint that every client contacts is a beacon that
+identifies users and can be blocked or enumerated.
 
-<a href="https://www.star-history.com/?repos=apernet%2Fhysteria&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=apernet/hysteria&type=date&theme=dark&legend=top-left&sealed_token=K7X7A4ntaPiRwqCXrW5ZLxZa8rNoQzDOr49Gv4mvXHJDHSerFPUWDcmyyBK_qe3bkV7UAoR_QSn-tFuLB48e3Bvb-eZrUFNk7M8uanHqCOXK2sR0WyHVkw" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=apernet/hysteria&type=date&legend=top-left&sealed_token=K7X7A4ntaPiRwqCXrW5ZLxZa8rNoQzDOr49Gv4mvXHJDHSerFPUWDcmyyBK_qe3bkV7UAoR_QSn-tFuLB48e3Bvb-eZrUFNk7M8uanHqCOXK2sR0WyHVkw" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=apernet/hysteria&type=date&legend=top-left&sealed_token=K7X7A4ntaPiRwqCXrW5ZLxZa8rNoQzDOr49Gv4mvXHJDHSerFPUWDcmyyBK_qe3bkV7UAoR_QSn-tFuLB48e3Bvb-eZrUFNk7M8uanHqCOXK2sR0WyHVkw" />
- </picture>
-</a>
+See [PROTOCOL.md](PROTOCOL.md) for the wire specification.
+
+## Building
+
+```bash
+python hyperbole.py build
+```
+
+Requires Go (version pinned in `go.work`) and Python 3. The binary lands in `build/`.
+
+## License
+
+MIT — see [LICENSE.md](LICENSE.md). Copyright in the upstream work this derives from
+remains with the Hysteria authors.

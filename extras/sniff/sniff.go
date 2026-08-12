@@ -11,9 +11,9 @@ import (
 
 	utls "github.com/refraction-networking/utls"
 
-	"github.com/apernet/hysteria/core/v2/server"
-	quicInternal "github.com/apernet/hysteria/extras/v2/sniff/internal/quic"
-	"github.com/apernet/hysteria/extras/v2/utils"
+	"github.com/chameleon-protocol/chameleon/core/v2/server"
+	quicInternal "github.com/chameleon-protocol/chameleon/extras/v2/sniff/internal/quic"
+	"github.com/chameleon-protocol/chameleon/extras/v2/utils"
 )
 
 const (

@@ -7,12 +7,12 @@ import (
 
 	"github.com/txthinking/socks5"
 
-	"github.com/apernet/hysteria/core/v2/client"
+	"github.com/chameleon-protocol/chameleon/core/v2/client"
 )
 
 const udpBufferSize = 4096
 
-// Server is a SOCKS5 server using a Hysteria client as outbound.
+// Server is a SOCKS5 server using a chameleon client as outbound.
 type Server struct {
 	HyClient    client.Client
 	AuthFunc    func(username, password string) bool // nil = no authentication

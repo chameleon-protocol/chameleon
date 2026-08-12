@@ -1,4 +1,4 @@
-module github.com/apernet/hysteria/app/v2
+module github.com/chameleon-protocol/chameleon/app/v2
 
 go 1.25.0
 
@@ -6,8 +6,8 @@ toolchain go1.25.1
 
 require (
 	github.com/apernet/go-tproxy v0.0.0-20230809025308-8f4723fd742f
-	github.com/apernet/hysteria/core/v2 v2.0.0-00010101000000-000000000000
-	github.com/apernet/hysteria/extras/v2 v2.0.0-00010101000000-000000000000
+	github.com/chameleon-protocol/chameleon/core/v2 v2.0.0-00010101000000-000000000000
+	github.com/chameleon-protocol/chameleon/extras/v2 v2.0.0-00010101000000-000000000000
 	github.com/apernet/sing-tun v0.2.6-0.20250920121535-299f04629986
 	github.com/caddyserver/certmagic v0.25.4
 	github.com/libdns/cloudflare v0.2.2
@@ -94,6 +94,6 @@ require (
 	rsc.io/qr v0.2.0 // indirect
 )
 
-replace github.com/apernet/hysteria/core/v2 => ../core
+replace github.com/chameleon-protocol/chameleon/core/v2 => ../core
 
-replace github.com/apernet/hysteria/extras/v2 => ../extras
+replace github.com/chameleon-protocol/chameleon/extras/v2 => ../extras

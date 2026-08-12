@@ -12,10 +12,10 @@ import (
 	"strings"
 	"sync"
 
-	eUtils "github.com/apernet/hysteria/extras/v2/utils"
+	eUtils "github.com/chameleon-protocol/chameleon/extras/v2/utils"
 )
 
-const firewallBackendEnv = "HYSTERIA_FIREWALL_BACKEND"
+const firewallBackendEnv = "CHAMELEON_FIREWALL_BACKEND"
 
 type osCommandRunner struct{}
 
@@ -90,7 +90,7 @@ func setupNFTablesRedirect(r commandRunner, listenAddr *net.UDPAddr, ports, redi
 	}
 	for _, family := range families {
 		hash := shortHash("nft|" + family + "|" + hashInput(listenAddr, ports))
-		tableName := "hysteria_" + hash
+		tableName := "chameleon_" + hash
 		if err := nft("add", "table", family, tableName); err != nil {
 			_ = cleanup.Close()
 			return nil, err
@@ -139,7 +139,7 @@ func setupIPTablesRedirect(r commandRunner, listenAddr *net.UDPAddr, ports, redi
 			return r.Run(bin, append([]string{"-w"}, args...)...)
 		}
 		hash := shortHash(bin + "|" + hashInput(listenAddr, ports))
-		chainName := "HYSTERIA-PR-" + hash
+		chainName := "CHAMELEON-PR-" + hash
 		if err := ipt("-t", "nat", "-N", chainName); err != nil {
 			_ = cleanup.Close()
 			return nil, err

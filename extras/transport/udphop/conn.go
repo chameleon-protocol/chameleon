@@ -18,7 +18,7 @@ const (
 
 	defaultHopInterval = 30 * time.Second
 
-	debugEnv = "HYSTERIA_UDPHOP_DEBUG"
+	debugEnv = "CHAMELEON_UDPHOP_DEBUG"
 )
 
 type HopIntervalConfig struct {

@@ -6,16 +6,31 @@ import (
 )
 
 const (
-	URLHost = "hysteria"
+	URLHost = "chameleon"
 	URLPath = "/auth"
 
-	RequestHeaderAuth        = "Hysteria-Auth"
-	ResponseHeaderUDPEnabled = "Hysteria-UDP"
-	CommonHeaderCCRX         = "Hysteria-CC-RX"
-	CommonHeaderPadding      = "Hysteria-Padding"
+	RequestHeaderAuth        = "Cham-Auth"
+	ResponseHeaderUDPEnabled = "Cham-UDP"
+	CommonHeaderCCRX         = "Cham-CC-RX"
+	CommonHeaderPadding      = "Cham-Padding"
 
-	StatusAuthOK = 233
+	// StatusAuthOK is a plain 200. Upstream used 233, which is a giveaway to a
+	// censor who buys a subscription and probes the server with credentials that
+	// work: no real web server answers 233. A 200 is indistinguishable from what
+	// the masquerade handler returns, but for that same reason the status code
+	// alone no longer proves the peer is one of ours — callers MUST also check
+	// IsAuthResponse.
+	//
+	// Renaming the headers only moves the target: they are still fixed strings a
+	// paying censor can grep for. Deriving them from the PSK is the actual fix.
+	StatusAuthOK = http.StatusOK
 )
+
+// IsAuthResponse reports whether a 200 came from us rather than from the
+// masquerade handler (or, when masq proxies upstream, from a real web server).
+func IsAuthResponse(h http.Header) bool {
+	return h.Get(ResponseHeaderUDPEnabled) != ""
+}
 
 // AuthRequest is what client sends to server for authentication.
 type AuthRequest struct {

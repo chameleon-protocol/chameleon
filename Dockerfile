@@ -7,14 +7,14 @@ ARG GOPROXY=""
 
 ENV GOPROXY ${GOPROXY}
 
-COPY . /go/src/github.com/apernet/hysteria
+COPY . /go/src/github.com/chameleon-protocol/chameleon
 
-WORKDIR /go/src/github.com/apernet/hysteria
+WORKDIR /go/src/github.com/chameleon-protocol/chameleon
 
 RUN set -ex \
     && apk add git build-base bash python3 \
     && python hyperbole.py build -r \
-    && mv ./build/hysteria-* /go/bin/hysteria
+    && mv ./build/chameleon-* /go/bin/chameleon
 
 # multi-stage builds to create the final image
 FROM alpine AS dist
@@ -35,6 +35,6 @@ RUN set -ex \
     && apk add bash tzdata ca-certificates iptables nftables \
     && rm -rf /var/cache/apk/*
 
-COPY --from=builder /go/bin/hysteria /usr/local/bin/hysteria
+COPY --from=builder /go/bin/chameleon /usr/local/bin/chameleon
 
-ENTRYPOINT ["hysteria"]
+ENTRYPOINT ["chameleon"]

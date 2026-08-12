@@ -18,10 +18,10 @@ func TestParse(t *testing.T) {
 		{
 			name: "no port",
 			args: args{
-				rawURL: "hysteria2://ganggang@icecreamsogood/",
+				rawURL: "chameleon://ganggang@icecreamsogood/",
 			},
 			want: &URL{
-				Scheme: "hysteria2",
+				Scheme: "chameleon",
 				User:   User("ganggang"),
 				Host:   "icecreamsogood",
 				Path:   "/",
@@ -30,10 +30,10 @@ func TestParse(t *testing.T) {
 		{
 			name: "single port",
 			args: args{
-				rawURL: "hysteria2://yesyes@icecreamsogood:8888/",
+				rawURL: "chameleon://yesyes@icecreamsogood:8888/",
 			},
 			want: &URL{
-				Scheme: "hysteria2",
+				Scheme: "chameleon",
 				User:   User("yesyes"),
 				Host:   "icecreamsogood:8888",
 				Path:   "/",
@@ -42,10 +42,10 @@ func TestParse(t *testing.T) {
 		{
 			name: "multi port",
 			args: args{
-				rawURL: "hysteria2://darkness@laplus.org:8888,9999,11111/",
+				rawURL: "chameleon://darkness@laplus.org:8888,9999,11111/",
 			},
 			want: &URL{
-				Scheme: "hysteria2",
+				Scheme: "chameleon",
 				User:   User("darkness"),
 				Host:   "laplus.org:8888,9999,11111",
 				Path:   "/",
@@ -54,10 +54,10 @@ func TestParse(t *testing.T) {
 		{
 			name: "range port",
 			args: args{
-				rawURL: "hysteria2://darkness@laplus.org:8888-9999/",
+				rawURL: "chameleon://darkness@laplus.org:8888-9999/",
 			},
 			want: &URL{
-				Scheme: "hysteria2",
+				Scheme: "chameleon",
 				User:   User("darkness"),
 				Host:   "laplus.org:8888-9999",
 				Path:   "/",
@@ -66,10 +66,10 @@ func TestParse(t *testing.T) {
 		{
 			name: "both",
 			args: args{
-				rawURL: "hysteria2://gawr:gura@atlantis.moe:443,7788-8899,10010/",
+				rawURL: "chameleon://gawr:gura@atlantis.moe:443,7788-8899,10010/",
 			},
 			want: &URL{
-				Scheme: "hysteria2",
+				Scheme: "chameleon",
 				User:   UserPassword("gawr", "gura"),
 				Host:   "atlantis.moe:443,7788-8899,10010",
 				Path:   "/",

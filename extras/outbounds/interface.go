@@ -5,7 +5,7 @@ import (
 	"net"
 	"strconv"
 
-	"github.com/apernet/hysteria/core/v2/server"
+	"github.com/chameleon-protocol/chameleon/core/v2/server"
 )
 
 // The PluggableOutbound system is designed to function in a chain-like manner.
@@ -17,10 +17,10 @@ import (
 // There can also be instances of branching, where requests can be sent to
 // different outbound sub-pipelines based on some criteria.
 
-// PluggableOutbound differs from the built-in Outbound interface from Hysteria core
+// PluggableOutbound differs from the built-in Outbound interface from chameleon core
 // in that it uses an AddrEx struct for addresses instead of a string. Because of this
 // difference, we need a special PluggableOutboundAdapter to convert between the two
-// for use in Hysteria core config.
+// for use in chameleon core config.
 type PluggableOutbound interface {
 	TCP(reqAddr *AddrEx) (net.Conn, error)
 	UDP(reqAddr *AddrEx) (UDPConn, error)

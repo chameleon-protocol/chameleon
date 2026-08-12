@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# install_server.sh - hysteria server install script
+# install_server.sh - chameleon server install script
 # Try `install_server.sh --help` for usage.
 #
 # SPDX-License-Identifier: MIT
@@ -21,13 +21,13 @@ SCRIPT_NAME="$(basename "$0")"
 SCRIPT_ARGS=("$@")
 
 # Path for installing executable
-EXECUTABLE_INSTALL_PATH="/usr/local/bin/hysteria"
+EXECUTABLE_INSTALL_PATH="/usr/local/bin/chameleon"
 
 # Paths to install systemd files
 SYSTEMD_SERVICES_DIR="/etc/systemd/system"
 
-# Directory to store hysteria config file
-CONFIG_DIR="/etc/hysteria"
+# Directory to store chameleon config file
+CONFIG_DIR="/etc/chameleon"
 
 # URLs of GitHub
 REPO_URL="https://github.com/chameleon-protocol/chameleon"
@@ -56,11 +56,11 @@ OPERATING_SYSTEM="${OPERATING_SYSTEM:-}"
 # Architecture of current machine, supported: 386, amd64, arm, arm64, mipsle, s390x
 ARCHITECTURE="${ARCHITECTURE:-}"
 
-# User for running hysteria
-HYSTERIA_USER="${HYSTERIA_USER:-}"
+# User for running chameleon
+CHAMELEON_USER="${CHAMELEON_USER:-}"
 
 # Directory for ACME certificates storage
-HYSTERIA_HOME_DIR="${HYSTERIA_HOME_DIR:-}"
+CHAMELEON_HOME_DIR="${CHAMELEON_HOME_DIR:-}"
 
 # SELinux context of systemd unit files
 SECONTEXT_SYSTEMD_UNIT="${SECONTEXT_SYSTEMD_UNIT:-}"
@@ -204,7 +204,7 @@ systemd_unit_working_directory() {
   # (released on Oct 2015, only CentOS 7 use an earlier version)
   # ref: systemd/systemd@5f5d8eab1f2f5f5e088bc301533b3e4636de96c7
   if [[ -n "$_systemd_version" && "$_systemd_version" -lt "227" ]]; then
-    echo "$HYSTERIA_HOME_DIR"
+    echo "$CHAMELEON_HOME_DIR"
     return
   fi
 
@@ -278,7 +278,7 @@ exec_sudo() {
     $(env | grep "^PACKAGE_MANAGEMENT_INSTALL=" || true)
     $(env | grep "^OPERATING_SYSTEM=" || true)
     $(env | grep "^ARCHITECTURE=" || true)
-    $(env | grep "^HYSTERIA_\w*=" || true)
+    $(env | grep "^CHAMELEON_\w*=" || true)
     $(env | grep "^SECONTEXT_SYSTEMD_UNIT=" || true)
     $(env | grep "^FORCE_\w*=" || true)
   )
@@ -616,38 +616,38 @@ vercmp() {
   return
 }
 
-check_hysteria_user() {
-  local _default_hysteria_user="$1"
+check_chameleon_user() {
+  local _default_chameleon_user="$1"
 
-  if [[ -n "$HYSTERIA_USER" ]]; then
+  if [[ -n "$CHAMELEON_USER" ]]; then
     return
   fi
 
-  if [[ ! -e "$SYSTEMD_SERVICES_DIR/hysteria-server.service" ]]; then
-    HYSTERIA_USER="$_default_hysteria_user"
+  if [[ ! -e "$SYSTEMD_SERVICES_DIR/chameleon-server.service" ]]; then
+    CHAMELEON_USER="$_default_chameleon_user"
     return
   fi
 
-  HYSTERIA_USER="$(grep -o '^User=\w*' "$SYSTEMD_SERVICES_DIR/hysteria-server.service" | tail -1 | cut -d '=' -f 2 || true)"
+  CHAMELEON_USER="$(grep -o '^User=\w*' "$SYSTEMD_SERVICES_DIR/chameleon-server.service" | tail -1 | cut -d '=' -f 2 || true)"
 
-  if [[ -z "$HYSTERIA_USER" ]]; then
-    HYSTERIA_USER="$_default_hysteria_user"
+  if [[ -z "$CHAMELEON_USER" ]]; then
+    CHAMELEON_USER="$_default_chameleon_user"
   fi
 }
 
-check_hysteria_homedir() {
-  local _default_hysteria_homedir="$1"
+check_chameleon_homedir() {
+  local _default_chameleon_homedir="$1"
 
-  if [[ -n "$HYSTERIA_HOME_DIR" ]]; then
+  if [[ -n "$CHAMELEON_HOME_DIR" ]]; then
     return
   fi
 
-  if ! is_user_exists "$HYSTERIA_USER"; then
-    HYSTERIA_HOME_DIR="$_default_hysteria_homedir"
+  if ! is_user_exists "$CHAMELEON_USER"; then
+    CHAMELEON_HOME_DIR="$_default_chameleon_homedir"
     return
   fi
 
-  HYSTERIA_HOME_DIR="$(eval echo ~"$HYSTERIA_USER")"
+  CHAMELEON_HOME_DIR="$(eval echo ~"$CHAMELEON_USER")"
 }
 
 
@@ -657,18 +657,18 @@ check_hysteria_homedir() {
 
 show_usage_and_exit() {
   echo
-  echo -e "\t$(tbold)$SCRIPT_NAME$(treset) - hysteria server install script"
+  echo -e "\t$(tbold)$SCRIPT_NAME$(treset) - chameleon server install script"
   echo
   echo -e "Usage:"
   echo
-  echo -e "$(tbold)Install hysteria$(treset)"
+  echo -e "$(tbold)Install chameleon$(treset)"
   echo -e "\t$0 [ -f | -l <file> | --version <version> ]"
   echo -e "Flags:"
   echo -e "\t-f, --force\tForce re-install latest or specified version even if it has been installed."
-  echo -e "\t-l, --local <file>\tInstall specified hysteria binary instead of download it."
+  echo -e "\t-l, --local <file>\tInstall specified chameleon binary instead of download it."
   echo -e "\t--version <version>\tInstall specified version instead of the latest."
   echo
-  echo -e "$(tbold)Remove hysteria$(treset)"
+  echo -e "$(tbold)Remove chameleon$(treset)"
   echo -e "\t$0 --remove"
   echo
   echo -e "$(tbold)Check for the update$(treset)"
@@ -753,22 +753,22 @@ parse_arguments() {
 # FILE TEMPLATES
 ###
 
-# /etc/systemd/system/hysteria-server.service
-tpl_hysteria_server_service_base() {
+# /etc/systemd/system/chameleon-server.service
+tpl_chameleon_server_service_base() {
   local _config_name="$1"
 
   cat << EOF
 [Unit]
-Description=Hysteria Server Service (${_config_name}.yaml)
+Description=chameleon Server Service (${_config_name}.yaml)
 After=network.target
 
 [Service]
 Type=simple
 ExecStart=$EXECUTABLE_INSTALL_PATH server --config ${CONFIG_DIR}/${_config_name}.yaml
 WorkingDirectory=$(systemd_unit_working_directory)
-User=$HYSTERIA_USER
-Group=$HYSTERIA_USER
-Environment=HYSTERIA_LOG_LEVEL=info
+User=$CHAMELEON_USER
+Group=$CHAMELEON_USER
+Environment=CHAMELEON_LOG_LEVEL=info
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 NoNewPrivileges=true
@@ -778,18 +778,18 @@ WantedBy=multi-user.target
 EOF
 }
 
-# /etc/systemd/system/hysteria-server.service
-tpl_hysteria_server_service() {
-  tpl_hysteria_server_service_base 'config'
+# /etc/systemd/system/chameleon-server.service
+tpl_chameleon_server_service() {
+  tpl_chameleon_server_service_base 'config'
 }
 
-# /etc/systemd/system/hysteria-server@.service
-tpl_hysteria_server_x_service() {
-  tpl_hysteria_server_service_base '%i'
+# /etc/systemd/system/chameleon-server@.service
+tpl_chameleon_server_x_service() {
+  tpl_chameleon_server_service_base '%i'
 }
 
-# /etc/hysteria/config.yaml
-tpl_etc_hysteria_config_yaml() {
+# /etc/chameleon/config.yaml
+tpl_etc_chameleon_config_yaml() {
   cat << EOF
 # listen: :443
 
@@ -821,7 +821,7 @@ get_running_services() {
   fi
 
   systemctl list-units --state=active --plain --no-legend \
-    | grep -o "hysteria-server@*[^\s]*.service" || true
+    | grep -o "chameleon-server@*[^\s]*.service" || true
 }
 
 restart_running_services() {
@@ -854,13 +854,13 @@ stop_running_services() {
 
 
 ###
-# HYSTERIA & GITHUB API
+# CHAMELEON & GITHUB API
 ###
 
-is_hysteria_installed() {
+is_chameleon_installed() {
   # RETURN VALUE
-  # 0: hysteria is installed
-  # 1: hysteria is not installed
+  # 0: chameleon is installed
+  # 1: chameleon is not installed
 
   if [[ -f "$EXECUTABLE_INSTALL_PATH" || -h "$EXECUTABLE_INSTALL_PATH" ]]; then
     return 0
@@ -868,18 +868,18 @@ is_hysteria_installed() {
   return 1
 }
 
-is_hysteria1_version() {
+is_chameleon1_version() {
   local _version="$1"
 
   has_prefix "$_version" "v1." || has_prefix "$_version" "v0."
 }
 
 get_installed_version() {
-  if is_hysteria_installed; then
+  if is_chameleon_installed; then
     if "$EXECUTABLE_INSTALL_PATH" version > /dev/null 2>&1; then
       "$EXECUTABLE_INSTALL_PATH" version | grep '^Version' | grep -o 'v[.0-9]*'
     elif "$EXECUTABLE_INSTALL_PATH" -v > /dev/null 2>&1; then
-      # hysteria 1
+      # chameleon 1
       "$EXECUTABLE_INSTALL_PATH" -v | cut -d ' ' -f 3
     fi
   fi
@@ -908,12 +908,12 @@ get_latest_version() {
   rm -f "$_tmpfile"
 }
 
-download_hysteria() {
+download_chameleon() {
   local _version="$1"
   local _destination="$2"
 
-  local _download_url="$REPO_URL/releases/download/app/$_version/hysteria-$OPERATING_SYSTEM-$ARCHITECTURE"
-  echo "Downloading hysteria binary: $_download_url ..."
+  local _download_url="$REPO_URL/releases/download/app/$_version/chameleon-$OPERATING_SYSTEM-$ARCHITECTURE"
+  echo "Downloading chameleon binary: $_download_url ..."
   if ! curl -R -H 'Cache-Control: no-cache' "$_download_url" -o "$_destination"; then
     error "Download failed, please check your network and try again."
     return 11
@@ -957,11 +957,11 @@ check_update() {
 # ENTRY
 ###
 
-perform_install_hysteria_binary() {
+perform_install_chameleon_binary() {
   if [[ -n "$LOCAL_FILE" ]]; then
     note "Performing local install: $LOCAL_FILE"
 
-    echo -ne "Installing hysteria executable ... "
+    echo -ne "Installing chameleon executable ... "
 
     if install -Dm755 "$LOCAL_FILE" "$EXECUTABLE_INSTALL_PATH"; then
       echo "ok"
@@ -974,12 +974,12 @@ perform_install_hysteria_binary() {
 
   local _tmpfile=$(mktemp)
 
-  if ! download_hysteria "$VERSION" "$_tmpfile"; then
+  if ! download_chameleon "$VERSION" "$_tmpfile"; then
     rm -f "$_tmpfile"
     exit 11
   fi
 
-  echo -ne "Installing hysteria executable ... "
+  echo -ne "Installing chameleon executable ... "
 
   if install -Dm755 "$_tmpfile" "$EXECUTABLE_INSTALL_PATH"; then
     echo "ok"
@@ -990,51 +990,51 @@ perform_install_hysteria_binary() {
   rm -f "$_tmpfile"
 }
 
-perform_remove_hysteria_binary() {
+perform_remove_chameleon_binary() {
   remove_file "$EXECUTABLE_INSTALL_PATH"
 }
 
-perform_install_hysteria_example_config() {
-  install_content -Dm644 "$(tpl_etc_hysteria_config_yaml)" "$CONFIG_DIR/config.yaml" ""
+perform_install_chameleon_example_config() {
+  install_content -Dm644 "$(tpl_etc_chameleon_config_yaml)" "$CONFIG_DIR/config.yaml" ""
 }
 
-perform_install_hysteria_systemd() {
+perform_install_chameleon_systemd() {
   if [[ "x$FORCE_NO_SYSTEMD" == "x2" ]]; then
     return
   fi
 
-  install_content -Dm644 "$(tpl_hysteria_server_service)" "$SYSTEMD_SERVICES_DIR/hysteria-server.service" "1"
-  install_content -Dm644 "$(tpl_hysteria_server_x_service)" "$SYSTEMD_SERVICES_DIR/hysteria-server@.service" "1"
+  install_content -Dm644 "$(tpl_chameleon_server_service)" "$SYSTEMD_SERVICES_DIR/chameleon-server.service" "1"
+  install_content -Dm644 "$(tpl_chameleon_server_x_service)" "$SYSTEMD_SERVICES_DIR/chameleon-server@.service" "1"
   if [[ -n "$SECONTEXT_SYSTEMD_UNIT" ]]; then
-    chcon "$SECONTEXT_SYSTEMD_UNIT" "$SYSTEMD_SERVICES_DIR/hysteria-server.service"
-    chcon "$SECONTEXT_SYSTEMD_UNIT" "$SYSTEMD_SERVICES_DIR/hysteria-server@.service"
+    chcon "$SECONTEXT_SYSTEMD_UNIT" "$SYSTEMD_SERVICES_DIR/chameleon-server.service"
+    chcon "$SECONTEXT_SYSTEMD_UNIT" "$SYSTEMD_SERVICES_DIR/chameleon-server@.service"
   fi
 
   systemctl daemon-reload
 }
 
-perform_remove_hysteria_systemd() {
-  remove_file "$SYSTEMD_SERVICES_DIR/hysteria-server.service"
-  remove_file "$SYSTEMD_SERVICES_DIR/hysteria-server@.service"
+perform_remove_chameleon_systemd() {
+  remove_file "$SYSTEMD_SERVICES_DIR/chameleon-server.service"
+  remove_file "$SYSTEMD_SERVICES_DIR/chameleon-server@.service"
 
   systemctl daemon-reload
 }
 
-perform_install_hysteria_home_legacy() {
-  if ! is_user_exists "$HYSTERIA_USER"; then
-    echo -ne "Creating user $HYSTERIA_USER ... "
-    useradd -r -d "$HYSTERIA_HOME_DIR" -m "$HYSTERIA_USER"
+perform_install_chameleon_home_legacy() {
+  if ! is_user_exists "$CHAMELEON_USER"; then
+    echo -ne "Creating user $CHAMELEON_USER ... "
+    useradd -r -d "$CHAMELEON_HOME_DIR" -m "$CHAMELEON_USER"
     echo "ok"
   fi
 }
 
 perform_install() {
   local _is_fresh_install
-  local _is_upgrade_from_hysteria1
-  if ! is_hysteria_installed; then
+  local _is_upgrade_from_chameleon1
+  if ! is_chameleon_installed; then
     _is_fresh_install=1
-  elif is_hysteria1_version "$(get_installed_version)"; then
-    _is_upgrade_from_hysteria1=1
+  elif is_chameleon1_version "$(get_installed_version)"; then
+    _is_upgrade_from_chameleon1=1
   fi
 
   local _is_update_required
@@ -1050,20 +1050,20 @@ perform_install() {
     _is_update_required=1
   fi
 
-  if is_hysteria1_version "$VERSION"; then
-    error "This script can only install Hysteria 2."
+  if is_chameleon1_version "$VERSION"; then
+    error "This script can only install chameleon."
     exit 95
   fi
 
   if [[ -n "$_is_update_required" ]]; then
-    perform_install_hysteria_binary
+    perform_install_chameleon_binary
   fi
 
   # Always install additional files, regardless of $_is_update_required.
-  # This allows changes to be made with environment variables (e.g. change HYSTERIA_USER without --force).
-  perform_install_hysteria_example_config
-  perform_install_hysteria_home_legacy
-  perform_install_hysteria_systemd
+  # This allows changes to be made with environment variables (e.g. change CHAMELEON_USER without --force).
+  perform_install_chameleon_example_config
+  perform_install_chameleon_home_legacy
+  perform_install_chameleon_systemd
 
   if [[ -z "$_is_update_required" ]]; then
     echo
@@ -1071,59 +1071,59 @@ perform_install() {
     echo
   elif [[ -n "$_is_fresh_install" ]]; then
     echo
-    echo -e "$(tbold)Congratulation! Hysteria 2 has been successfully installed on your server.$(treset)"
+    echo -e "$(tbold)Congratulation! chameleon has been successfully installed on your server.$(treset)"
     echo
     echo -e "What's next?"
     echo
-    echo -e "\t+ Take a look at the differences between Hysteria 2 and Hysteria 1 at https://hysteria.network/docs/misc/2-vs-1/"
-    echo -e "\t+ Check out the quick server config guide at $(tblue)https://hysteria.network/docs/getting-started/Server/$(treset)"
+    echo -e "\t+ Take a look at the differences between chameleon and chameleon 1 at https://chameleon.network/docs/misc/2-vs-1/"
+    echo -e "\t+ Check out the quick server config guide at $(tblue)https://chameleon.network/docs/getting-started/Server/$(treset)"
     echo -e "\t+ Edit server config file at $(tred)$CONFIG_DIR/config.yaml$(treset)"
-    echo -e "\t+ Start your hysteria server with $(tred)systemctl start hysteria-server.service$(treset)"
-    echo -e "\t+ Configure hysteria start on system boot with $(tred)systemctl enable hysteria-server.service$(treset)"
+    echo -e "\t+ Start your chameleon server with $(tred)systemctl start chameleon-server.service$(treset)"
+    echo -e "\t+ Configure chameleon start on system boot with $(tred)systemctl enable chameleon-server.service$(treset)"
     echo
-  elif [[ -n "$_is_upgrade_from_hysteria1" ]]; then
+  elif [[ -n "$_is_upgrade_from_chameleon1" ]]; then
     echo -e "Skip automatic service restart due to $(tred)incompatible$(treset) upgrade."
     echo
-    echo -e "$(tbold)Hysteria has been successfully update to $VERSION from Hysteria 1.$(treset)"
+    echo -e "$(tbold)chameleon has been successfully update to $VERSION from chameleon 1.$(treset)"
     echo
-    echo -e "$(tred)Hysteria 2 uses a completely redesigned protocol & config, which is NOT compatible with the version 1.x.x in any way.$(treset)"
+    echo -e "$(tred)chameleon uses a completely redesigned protocol & config, which is NOT compatible with the version 1.x.x in any way.$(treset)"
     echo
-    echo -e "\t+ Take a look at the behavior changes in Hysteria 2 at $(tblue)https://hysteria.network/docs/misc/2-vs-1/$(treset)"
-    echo -e "\t+ Check out the quick server configuration guide for Hysteria 2 at $(tblue)https://hysteria.network/docs/getting-started/Server/$(treset)"
-    echo -e "\t+ Migrate server config file to the Hysteria 2 at $(tred)$CONFIG_DIR/config.yaml$(treset)"
-    echo -e "\t+ Start your hysteria server with $(tred)systemctl restart hysteria-server.service$(treset)"
-    echo -e "\t+ Configure hysteria start on system boot with $(tred)systemctl enable hysteria-server.service$(treset)"
+    echo -e "\t+ Take a look at the behavior changes in chameleon at $(tblue)https://chameleon.network/docs/misc/2-vs-1/$(treset)"
+    echo -e "\t+ Check out the quick server configuration guide for chameleon at $(tblue)https://chameleon.network/docs/getting-started/Server/$(treset)"
+    echo -e "\t+ Migrate server config file to the chameleon at $(tred)$CONFIG_DIR/config.yaml$(treset)"
+    echo -e "\t+ Start your chameleon server with $(tred)systemctl restart chameleon-server.service$(treset)"
+    echo -e "\t+ Configure chameleon start on system boot with $(tred)systemctl enable chameleon-server.service$(treset)"
   else
     restart_running_services
 
     echo
-    echo -e "$(tbold)Hysteria has been successfully update to $VERSION.$(treset)"
+    echo -e "$(tbold)chameleon has been successfully update to $VERSION.$(treset)"
     echo
-    echo -e "Check out the latest changelog $(tblue)https://github.com/apernet/hysteria/blob/master/CHANGELOG.md$(treset)"
+    echo -e "Check out the latest changelog $(tblue)https://github.com/chameleon-protocol/chameleon/blob/master/CHANGELOG.md$(treset)"
     echo
   fi
 }
 
 perform_remove() {
-  perform_remove_hysteria_binary
+  perform_remove_chameleon_binary
   stop_running_services
-  perform_remove_hysteria_systemd
+  perform_remove_chameleon_systemd
 
   echo
-  echo -e "$(tbold)Congratulation! Hysteria has been successfully removed from your server.$(treset)"
+  echo -e "$(tbold)Congratulation! chameleon has been successfully removed from your server.$(treset)"
   echo
   echo -e "You still need to remove configuration files and ACME certificates manually with the following commands:"
   echo
   echo -e "\t$(tred)rm -rf "$CONFIG_DIR"$(treset)"
-  if [[ "x$HYSTERIA_USER" != "xroot" ]]; then
-    echo -e "\t$(tred)userdel -r "$HYSTERIA_USER"$(treset)"
+  if [[ "x$CHAMELEON_USER" != "xroot" ]]; then
+    echo -e "\t$(tred)userdel -r "$CHAMELEON_USER"$(treset)"
   fi
   if [[ "x$FORCE_NO_SYSTEMD" != "x2" ]]; then
     echo
     echo -e "You still might need to disable all related systemd services with the following commands:"
     echo
-    echo -e "\t$(tred)rm -f /etc/systemd/system/multi-user.target.wants/hysteria-server.service$(treset)"
-    echo -e "\t$(tred)rm -f /etc/systemd/system/multi-user.target.wants/hysteria-server@*.service$(treset)"
+    echo -e "\t$(tred)rm -f /etc/systemd/system/multi-user.target.wants/chameleon-server.service$(treset)"
+    echo -e "\t$(tred)rm -f /etc/systemd/system/multi-user.target.wants/chameleon-server@*.service$(treset)"
     echo -e "\t$(tred)systemctl daemon-reload$(treset)"
   fi
   echo
@@ -1148,8 +1148,8 @@ main() {
 
   check_permission
   check_environment
-  check_hysteria_user "hysteria"
-  check_hysteria_homedir "/var/lib/$HYSTERIA_USER"
+  check_chameleon_user "chameleon"
+  check_chameleon_homedir "/var/lib/$CHAMELEON_USER"
 
   case "$OPERATION" in
     "install")

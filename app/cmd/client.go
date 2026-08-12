@@ -26,22 +26,22 @@ import (
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 
-	"github.com/apernet/hysteria/app/v2/internal/forwarding"
-	"github.com/apernet/hysteria/app/v2/internal/http"
-	"github.com/apernet/hysteria/app/v2/internal/mimic"
-	"github.com/apernet/hysteria/app/v2/internal/proxymux"
-	"github.com/apernet/hysteria/app/v2/internal/redirect"
-	"github.com/apernet/hysteria/app/v2/internal/sockopts"
-	"github.com/apernet/hysteria/app/v2/internal/socks5"
-	"github.com/apernet/hysteria/app/v2/internal/tproxy"
-	"github.com/apernet/hysteria/app/v2/internal/tun"
-	"github.com/apernet/hysteria/app/v2/internal/url"
-	"github.com/apernet/hysteria/app/v2/internal/utils"
-	"github.com/apernet/hysteria/core/v2/client"
-	"github.com/apernet/hysteria/extras/v2/correctnet"
-	"github.com/apernet/hysteria/extras/v2/obfs"
-	"github.com/apernet/hysteria/extras/v2/realm"
-	"github.com/apernet/hysteria/extras/v2/transport/udphop"
+	"github.com/chameleon-protocol/chameleon/app/v2/internal/forwarding"
+	"github.com/chameleon-protocol/chameleon/app/v2/internal/http"
+	"github.com/chameleon-protocol/chameleon/app/v2/internal/mimic"
+	"github.com/chameleon-protocol/chameleon/app/v2/internal/proxymux"
+	"github.com/chameleon-protocol/chameleon/app/v2/internal/redirect"
+	"github.com/chameleon-protocol/chameleon/app/v2/internal/sockopts"
+	"github.com/chameleon-protocol/chameleon/app/v2/internal/socks5"
+	"github.com/chameleon-protocol/chameleon/app/v2/internal/tproxy"
+	"github.com/chameleon-protocol/chameleon/app/v2/internal/tun"
+	"github.com/chameleon-protocol/chameleon/app/v2/internal/url"
+	"github.com/chameleon-protocol/chameleon/app/v2/internal/utils"
+	"github.com/chameleon-protocol/chameleon/core/v2/client"
+	"github.com/chameleon-protocol/chameleon/extras/v2/correctnet"
+	"github.com/chameleon-protocol/chameleon/extras/v2/obfs"
+	"github.com/chameleon-protocol/chameleon/extras/v2/realm"
+	"github.com/chameleon-protocol/chameleon/extras/v2/transport/udphop"
 )
 
 // Ref: https://ip.skk.moe/stun
@@ -562,7 +562,7 @@ func (c *clientConfig) URI() string {
 		}
 	}
 	u := url.URL{
-		Scheme:   "hysteria2",
+		Scheme:   "chameleon",
 		User:     user,
 		Host:     c.Server,
 		Path:     "/",
@@ -581,7 +581,7 @@ func (c *clientConfig) parseURI() bool {
 	if err != nil {
 		return false
 	}
-	if u.Scheme != "hysteria2" && u.Scheme != "hy2" {
+	if u.Scheme != "chameleon" && u.Scheme != "chm" {
 		return false
 	}
 	if u.User != nil {
@@ -619,7 +619,7 @@ func (c *clientConfig) parseURI() bool {
 	return true
 }
 
-// Config validates the fields and returns a ready-to-use Hysteria client config
+// Config validates the fields and returns a ready-to-use chameleon client config
 func (c *clientConfig) Config() (*client.Config, error) {
 	if realmAddr, ok, err := c.parseRealmAddr(); ok || err != nil {
 		if err != nil {
@@ -1026,7 +1026,7 @@ func clientHTTP(config httpConfig, c client.Client) error {
 		}
 	}
 	if config.Realm == "" {
-		config.Realm = "Hysteria"
+		config.Realm = "chameleon"
 	}
 	h := http.Server{
 		HyClient:    c,

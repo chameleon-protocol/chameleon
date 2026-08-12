@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/apernet/hysteria/extras/v2/utils"
+	"github.com/chameleon-protocol/chameleon/extras/v2/utils"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"

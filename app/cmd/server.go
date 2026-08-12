@@ -23,7 +23,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/apernet/hysteria/app/v2/internal/mimic"
+	"github.com/chameleon-protocol/chameleon/app/v2/internal/mimic"
 
 	"github.com/caddyserver/certmagic"
 	"github.com/libdns/cloudflare"
@@ -40,18 +40,18 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
 
-	"github.com/apernet/hysteria/app/v2/internal/firewall"
-	"github.com/apernet/hysteria/app/v2/internal/utils"
-	"github.com/apernet/hysteria/core/v2/server"
-	"github.com/apernet/hysteria/extras/v2/auth"
-	"github.com/apernet/hysteria/extras/v2/correctnet"
-	"github.com/apernet/hysteria/extras/v2/masq"
-	"github.com/apernet/hysteria/extras/v2/obfs"
-	"github.com/apernet/hysteria/extras/v2/outbounds"
-	"github.com/apernet/hysteria/extras/v2/realm"
-	"github.com/apernet/hysteria/extras/v2/sniff"
-	"github.com/apernet/hysteria/extras/v2/trafficlogger"
-	eUtils "github.com/apernet/hysteria/extras/v2/utils"
+	"github.com/chameleon-protocol/chameleon/app/v2/internal/firewall"
+	"github.com/chameleon-protocol/chameleon/app/v2/internal/utils"
+	"github.com/chameleon-protocol/chameleon/core/v2/server"
+	"github.com/chameleon-protocol/chameleon/extras/v2/auth"
+	"github.com/chameleon-protocol/chameleon/extras/v2/correctnet"
+	"github.com/chameleon-protocol/chameleon/extras/v2/masq"
+	"github.com/chameleon-protocol/chameleon/extras/v2/obfs"
+	"github.com/chameleon-protocol/chameleon/extras/v2/outbounds"
+	"github.com/chameleon-protocol/chameleon/extras/v2/realm"
+	"github.com/chameleon-protocol/chameleon/extras/v2/sniff"
+	"github.com/chameleon-protocol/chameleon/extras/v2/trafficlogger"
+	eUtils "github.com/chameleon-protocol/chameleon/extras/v2/utils"
 )
 
 const (
@@ -1537,12 +1537,12 @@ func (c *serverConfig) fillMasqHandler(hyConfig *server.Config) error {
 		if c.Masquerade.String.Content == "" {
 			return configError{Field: "masquerade.string.content", Err: errors.New("empty string content")}
 		}
+		// No status code is reserved any more: authentication answers a plain 200
+		// and is told apart by a response header, not by the code.
 		if c.Masquerade.String.StatusCode != 0 &&
 			(c.Masquerade.String.StatusCode < 200 ||
-				c.Masquerade.String.StatusCode > 599 ||
-				c.Masquerade.String.StatusCode == 233) {
-			// 233 is reserved for Hysteria authentication
-			return configError{Field: "masquerade.string.statusCode", Err: errors.New("invalid status code (must be 200-599, except 233)")}
+				c.Masquerade.String.StatusCode > 599) {
+			return configError{Field: "masquerade.string.statusCode", Err: errors.New("invalid status code (must be 200-599)")}
 		}
 		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			for k, v := range c.Masquerade.String.Headers {
@@ -1580,7 +1580,7 @@ func (c *serverConfig) fillMasqHandler(hyConfig *server.Config) error {
 	return nil
 }
 
-// Config validates the fields and returns a ready-to-use Hysteria server config
+// Config validates the fields and returns a ready-to-use chameleon server config
 func (c *serverConfig) Config() (*server.Config, error) {
 	hyConfig := &server.Config{}
 	fillers := []func(*server.Config) error{

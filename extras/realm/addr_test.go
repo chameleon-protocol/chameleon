@@ -100,7 +100,7 @@ func TestParseAddrInvalid(t *testing.T) {
 		raw  string
 		err  error
 	}{
-		{name: "unsupported scheme", raw: "hysteria2://secret@example.com/realm", err: ErrInvalidScheme},
+		{name: "unsupported scheme", raw: "chameleon://secret@example.com/realm", err: ErrInvalidScheme},
 		{name: "missing token", raw: "realm://example.com/realm", err: ErrInvalidAddr},
 		{name: "missing host", raw: "realm://secret@/realm", err: ErrInvalidAddr},
 		{name: "missing realm", raw: "realm://secret@example.com", err: ErrInvalidAddr},

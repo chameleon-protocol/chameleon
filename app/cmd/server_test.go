@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/apernet/hysteria/core/v2/server"
-	"github.com/apernet/hysteria/extras/v2/realm"
-	eUtils "github.com/apernet/hysteria/extras/v2/utils"
+	"github.com/chameleon-protocol/chameleon/core/v2/server"
+	"github.com/chameleon-protocol/chameleon/extras/v2/realm"
+	eUtils "github.com/chameleon-protocol/chameleon/extras/v2/utils"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/spf13/viper"

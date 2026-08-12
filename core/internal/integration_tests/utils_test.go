@@ -5,7 +5,7 @@ import (
 	"io"
 	"net"
 
-	"github.com/apernet/hysteria/core/v2/server"
+	"github.com/chameleon-protocol/chameleon/core/v2/server"
 )
 
 // This file provides utilities for the integration tests.

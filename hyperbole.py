@@ -9,11 +9,11 @@ import subprocess
 import datetime
 import shutil
 
-# Hyperbole is the official build script for Hysteria.
+# Hyperbole is the official build script for chameleon.
 # Available environment variables for controlling the build:
-#   - HY_APP_VERSION: App version
-#   - HY_APP_COMMIT: App commit hash
-#   - HY_APP_PLATFORMS: Platforms to build for (e.g. "windows/amd64,linux/arm")
+#   - CHM_APP_VERSION: App version
+#   - CHM_APP_COMMIT: App commit hash
+#   - CHM_APP_PLATFORMS: Platforms to build for (e.g. "windows/amd64,linux/arm")
 
 
 LOGO = """
@@ -22,7 +22,7 @@ LOGO = """
 ░▀░▀░░▀░░▀░░░▀▀▀░▀░▀░▀▀░░▀▀▀░▀▀▀░▀▀▀
 """
 
-DESC = "Hyperbole is the official build script for Hysteria."
+DESC = "Hyperbole is the official build script for chameleon."
 
 BUILD_DIR = "build"
 
@@ -31,7 +31,7 @@ GO_WORK_FILE = "go.work"
 CORE_SRC_DIR = "./core"
 EXTRAS_SRC_DIR = "./extras"
 APP_SRC_DIR = "./app"
-APP_SRC_CMD_PKG = "github.com/apernet/hysteria/app/v2/cmd"
+APP_SRC_CMD_PKG = "github.com/chameleon-protocol/chameleon/app/v2/cmd"
 
 MODULE_SRC_DIRS = [CORE_SRC_DIR, EXTRAS_SRC_DIR, APP_SRC_DIR]
 
@@ -146,7 +146,7 @@ def check_build_env():
 
 
 def get_app_version():
-    app_version = os.environ.get("HY_APP_VERSION")
+    app_version = os.environ.get("CHM_APP_VERSION")
     if not app_version:
         try:
             output = (
@@ -179,7 +179,7 @@ def get_app_version_code(str=None):
 
 
 def get_app_commit():
-    app_commit = os.environ.get("HY_APP_COMMIT")
+    app_commit = os.environ.get("CHM_APP_COMMIT")
     if not app_commit:
         try:
             app_commit = (
@@ -218,7 +218,7 @@ def get_lib_version():
 
 
 def get_app_platforms():
-    platforms = os.environ.get("HY_APP_PLATFORMS")
+    platforms = os.environ.get("CHM_APP_PLATFORMS")
     if not platforms:
         d_os, d_arch = get_current_os_arch()
         return [(d_os, d_arch)]
@@ -273,7 +273,7 @@ def cmd_build(pprof=False, release=False, race=False):
     for os_name, arch in get_app_platforms():
         print("Building for %s/%s..." % (os_name, arch))
 
-        out_name = "hysteria-%s-%s" % (os_name, arch)
+        out_name = "chameleon-%s-%s" % (os_name, arch)
         if os_name == "windows":
             out_name += ".exe"
 

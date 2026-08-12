@@ -7,8 +7,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/apernet/hysteria/extras/v2/outbounds/acl"
-	"github.com/apernet/hysteria/extras/v2/outbounds/acl/v2geo"
+	"github.com/chameleon-protocol/chameleon/extras/v2/outbounds/acl"
+	"github.com/chameleon-protocol/chameleon/extras/v2/outbounds/acl/v2geo"
 )
 
 const (
@@ -16,7 +16,7 @@ const (
 	geoipURL        = "https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geoip.dat"
 	geositeFilename = "geosite.dat"
 	geositeURL      = "https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat"
-	geoDlTmpPattern = ".hysteria-geoloader.dlpart.*"
+	geoDlTmpPattern = ".chameleon-geoloader.dlpart.*"
 
 	geoDefaultUpdateInterval = 7 * 24 * time.Hour // 7 days
 )

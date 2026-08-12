@@ -24,7 +24,7 @@ const (
 var (
 	ErrInvalidPunchPacket = errors.New("invalid punch packet")
 
-	punchMagic = [8]byte{'H', 'Y', 'R', 'L', 'M', 'v', '1', 0}
+	punchMagic = [8]byte{'C', 'H', 'R', 'L', 'M', 'v', '1', 0}
 )
 
 type PunchPacketType byte

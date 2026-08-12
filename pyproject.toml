@@ -1,10 +1,10 @@
 [project]
-name = "hysteria-dev-tools"
+name = "chameleon-dev-tools"
 version = "0"
-description = "Build script (hyperbole) and Python test helpers for Hysteria"
+description = "Build script (hyperbole) and Python test helpers for chameleon"
 requires-python = ">=3.11"
 dependencies = [
-    # hyperbole.py (publish) and app/internal/http test client
+    # app/internal/http test client
     "requests>=2.32",
     # extras/auth HTTP auth test server
     "flask>=3.1",

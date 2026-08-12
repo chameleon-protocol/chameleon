@@ -4,7 +4,7 @@ import (
 	"io"
 	"net"
 
-	"github.com/apernet/hysteria/core/v2/client"
+	"github.com/chameleon-protocol/chameleon/core/v2/client"
 )
 
 type TCPTunnel struct {

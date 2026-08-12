@@ -4,7 +4,7 @@ import (
 	"net"
 	"strings"
 
-	"github.com/apernet/hysteria/core/v2/server"
+	"github.com/chameleon-protocol/chameleon/core/v2/server"
 )
 
 const (

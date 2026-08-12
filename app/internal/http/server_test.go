@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/apernet/hysteria/core/v2/client"
+	"github.com/chameleon-protocol/chameleon/core/v2/client"
 )
 
 const (

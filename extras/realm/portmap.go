@@ -15,7 +15,7 @@ const (
 	defaultPortMapTimeout  = 10 * time.Second
 	defaultPortMapLifetime = 10 * time.Minute
 
-	portMapDescription = "hysteria-realm"
+	portMapDescription = "chameleon-realm"
 	portMapProtocol    = "udp"
 )
 

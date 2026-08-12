@@ -5,7 +5,7 @@ import (
 	"net"
 	"strings"
 
-	eUtils "github.com/apernet/hysteria/extras/v2/utils"
+	eUtils "github.com/chameleon-protocol/chameleon/extras/v2/utils"
 )
 
 type commandRunner interface {

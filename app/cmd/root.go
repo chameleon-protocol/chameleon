@@ -13,16 +13,16 @@ import (
 
 const (
 	appLogo = `
-░█░█░█░█░█▀▀░▀█▀░█▀▀░█▀▄░▀█▀░█▀█░░░▀▀▄
-░█▀█░░█░░▀▀█░░█░░█▀▀░█▀▄░░█░░█▀█░░░▄▀░
-░▀░▀░░▀░░▀▀▀░░▀░░▀▀▀░▀░▀░▀▀▀░▀░▀░░░▀▀▀
+░█▀▀░█░█░█▀█░█▀▄▀█░█▀▀░█░░░█▀▀░█▀█░█▄░█
+░█░░░█▀█░█▀█░█░▀░█░█▀▀░█░░░█▀▀░█░█░█░▀█
+░▀▀▀░▀░▀░▀░▀░▀░░░▀░▀▀▀░▀▀▀░▀▀▀░▀▀▀░▀░░▀
 `
-	appDesc    = "a powerful, lightning fast and censorship resistant proxy"
-	appAuthors = "Aperture Internet Laboratory <https://github.com/apernet>"
+	appDesc    = "a censorship-resistant transport that keeps working when the network does not"
+	appAuthors = "https://github.com/chameleon-protocol/chameleon"
 
-	appLogLevelEnv  = "HYSTERIA_LOG_LEVEL"
-	appLogFormatEnv = "HYSTERIA_LOG_FORMAT"
-	appACMEDirEnv   = "HYSTERIA_ACME_DIR"
+	appLogLevelEnv  = "CHAMELEON_LOG_LEVEL"
+	appLogFormatEnv = "CHAMELEON_LOG_FORMAT"
+	appACMEDirEnv   = "CHAMELEON_ACME_DIR"
 )
 
 var (
@@ -62,7 +62,7 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "hysteria",
+	Use:   "chameleon",
 	Short: appDesc,
 	Long:  appAboutLong,
 	Run:   runClientCmd, // Default to client mode
@@ -127,8 +127,8 @@ func initConfig() {
 		defaultViper.SetConfigType("yaml")
 		viper.SupportedExts = append([]string{"yaml", "yml"}, viper.SupportedExts...)
 		defaultViper.AddConfigPath(".")
-		defaultViper.AddConfigPath("$HOME/.hysteria")
-		defaultViper.AddConfigPath("/etc/hysteria/")
+		defaultViper.AddConfigPath("$HOME/.chameleon")
+		defaultViper.AddConfigPath("/etc/chameleon/")
 	}
 }
 

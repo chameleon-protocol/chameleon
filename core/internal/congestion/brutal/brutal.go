@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/apernet/hysteria/core/v2/internal/congestion/common"
+	"github.com/chameleon-protocol/chameleon/core/v2/internal/congestion/common"
 
 	"github.com/apernet/quic-go/congestion"
 	"github.com/apernet/quic-go/monotime"
@@ -18,7 +18,7 @@ const (
 	minAckRate                 = 0.8
 	congestionWindowMultiplier = 2
 
-	debugEnv           = "HYSTERIA_BRUTAL_DEBUG"
+	debugEnv           = "CHAMELEON_BRUTAL_DEBUG"
 	debugPrintInterval = 2
 )
 

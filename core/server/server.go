@@ -14,9 +14,9 @@ import (
 	"github.com/apernet/quic-go/http3"
 	"github.com/apernet/quic-go/quicvarint"
 
-	"github.com/apernet/hysteria/core/v2/internal/congestion"
-	"github.com/apernet/hysteria/core/v2/internal/protocol"
-	"github.com/apernet/hysteria/core/v2/internal/utils"
+	"github.com/chameleon-protocol/chameleon/core/v2/internal/congestion"
+	"github.com/chameleon-protocol/chameleon/core/v2/internal/protocol"
+	"github.com/chameleon-protocol/chameleon/core/v2/internal/utils"
 )
 
 const (

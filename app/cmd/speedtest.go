@@ -12,10 +12,10 @@ import (
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 
-	"github.com/apernet/hysteria/core/v2/client"
-	hyErrors "github.com/apernet/hysteria/core/v2/errors"
-	"github.com/apernet/hysteria/extras/v2/outbounds"
-	"github.com/apernet/hysteria/extras/v2/outbounds/speedtest"
+	"github.com/chameleon-protocol/chameleon/core/v2/client"
+	hyErrors "github.com/chameleon-protocol/chameleon/core/v2/errors"
+	"github.com/chameleon-protocol/chameleon/extras/v2/outbounds"
+	"github.com/chameleon-protocol/chameleon/extras/v2/outbounds/speedtest"
 )
 
 var (

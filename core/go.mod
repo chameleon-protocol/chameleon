@@ -1,4 +1,4 @@
-module github.com/apernet/hysteria/core/v2
+module github.com/chameleon-protocol/chameleon/core/v2
 
 go 1.25.0
 

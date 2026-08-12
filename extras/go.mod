@@ -1,11 +1,11 @@
-module github.com/apernet/hysteria/extras/v2
+module github.com/chameleon-protocol/chameleon/extras/v2
 
 go 1.25.0
 
 toolchain go1.25.1
 
 require (
-	github.com/apernet/hysteria/core/v2 v2.0.0-00010101000000-000000000000
+	github.com/chameleon-protocol/chameleon/core/v2 v2.0.0-00010101000000-000000000000
 	github.com/apernet/quic-go v0.61.1-0.20260806010916-184d081eef3e
 	github.com/database64128/tfo-go/v2 v2.3.3
 	github.com/hashicorp/golang-lru/v2 v2.0.7
@@ -48,4 +48,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/apernet/hysteria/core/v2 => ../core
+replace github.com/chameleon-protocol/chameleon/core/v2 => ../core

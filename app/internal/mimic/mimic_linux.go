@@ -85,7 +85,7 @@ func Start(cfg Config, role Role, addr *net.UDPAddr, logger *zap.Logger, onExit 
 	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
 	cmd.WaitDelay = 5 * time.Second
 	// Ask the kernel to kill Mimic if we die without getting to stop it. A
-	// surviving instance would keep rewriting packets for a Hysteria that is no
+	// surviving instance would keep rewriting packets for a chameleon that is no
 	// longer there, and would block the next start.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGTERM}
 

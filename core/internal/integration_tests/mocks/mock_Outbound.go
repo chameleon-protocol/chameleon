@@ -5,7 +5,7 @@ package mocks
 import (
 	net "net"
 
-	server "github.com/apernet/hysteria/core/v2/server"
+	server "github.com/chameleon-protocol/chameleon/core/v2/server"
 	mock "github.com/stretchr/testify/mock"
 )
 

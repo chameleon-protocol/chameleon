@@ -1,6 +1,6 @@
 package main
 
-import "github.com/apernet/hysteria/app/v2/cmd"
+import "github.com/chameleon-protocol/chameleon/app/v2/cmd"
 
 func main() {
 	cmd.Execute()

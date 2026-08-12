@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/apernet/hysteria/app/v2/internal/proxymux/internal/mocks"
+	"github.com/chameleon-protocol/chameleon/app/v2/internal/proxymux/internal/mocks"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"

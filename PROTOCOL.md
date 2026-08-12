@@ -1,6 +1,6 @@
-# Hysteria 2 Protocol Specification
+# chameleon Protocol Specification
 
-Hysteria is a TCP & UDP proxy based on QUIC, designed for speed, security and censorship resistance. This document describes the protocol used by Hysteria starting with version 2.0.0, sometimes internally referred to as the "v4" protocol. From here on, we will call it "the protocol" or "the Hysteria protocol".
+chameleon is a TCP & UDP proxy based on QUIC, designed for speed, security and censorship resistance. This document describes the protocol used by chameleon starting with version 2.0.0, sometimes internally referred to as the "v4" protocol. From here on, we will call it "the protocol" or "the chameleon protocol".
 
 ## Requirements Language
 
@@ -8,7 +8,7 @@ The keywords "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SH
 
 ## Underlying Protocol & Wire Format
 
-The Hysteria protocol MUST be implemented on top of the standard QUIC transport protocol [RFC 9000](https://datatracker.ietf.org/doc/html/rfc9000) with [Unreliable Datagram Extension](https://datatracker.ietf.org/doc/rfc9221/).
+The chameleon protocol MUST be implemented on top of the standard QUIC transport protocol [RFC 9000](https://datatracker.ietf.org/doc/html/rfc9000) with [Unreliable Datagram Extension](https://datatracker.ietf.org/doc/rfc9221/).
 
 All multibyte numbers use Big Endian format.
 
@@ -16,51 +16,53 @@ All variable-length integers ("varints") are encoded/decoded as defined in QUIC 
 
 ## Authentication & HTTP/3 masquerading
 
-One of the key features of the Hysteria protocol is that to a third party without proper authentication credentials (whether it's a middleman or an active prober), a Hysteria proxy server behaves just like a standard HTTP/3 web server. Additionally, the encrypted traffic between the client and the server appears indistinguishable from normal HTTP/3 traffic.
+One of the key features of the chameleon protocol is that to a third party without proper authentication credentials (whether it's a middleman or an active prober), a chameleon proxy server behaves just like a standard HTTP/3 web server. Additionally, the encrypted traffic between the client and the server appears indistinguishable from normal HTTP/3 traffic.
 
-Therefore, a Hysteria server MUST implement an HTTP/3 server (as defined by [RFC 9114](https://datatracker.ietf.org/doc/rfc9114/)) and handle HTTP requests as any standard web server would. To prevent active probers from detecting common response patterns in Hysteria servers, implementations SHOULD advise users to either host actual content or set it up as a reverse proxy for other sites.
+Therefore, a chameleon server MUST implement an HTTP/3 server (as defined by [RFC 9114](https://datatracker.ietf.org/doc/rfc9114/)) and handle HTTP requests as any standard web server would. To prevent active probers from detecting common response patterns in chameleon servers, implementations SHOULD advise users to either host actual content or set it up as a reverse proxy for other sites.
 
-An actual Hysteria client, upon connection, MUST send the following HTTP/3 request to the server:
+An actual chameleon client, upon connection, MUST send the following HTTP/3 request to the server:
 
 ```
 :method: POST
 :path: /auth
-:host: hysteria
-Hysteria-Auth: [string]
-Hysteria-CC-RX: [uint]
-Hysteria-Padding: [string]
+:host: chameleon
+Cham-Auth: [string]
+Cham-CC-RX: [uint]
+Cham-Padding: [string]
 ```
 
-`Hysteria-Auth`: Authentication credentials.
+`Cham-Auth`: Authentication credentials.
 
-`Hysteria-CC-RX`: Client's maximum receive rate in bytes per second. A value of 0 indicates unknown.
+`Cham-CC-RX`: Client's maximum receive rate in bytes per second. A value of 0 indicates unknown.
 
-`Hysteria-Padding`: A random padding string of variable length.
+`Cham-Padding`: A random padding string of variable length.
 
-The Hysteria server MUST identify this special request, and, instead of attempting to serve content or forwarding it to an upstream site, it MUST authenticate the client using the provided information. If authentication is successful, the server MUST send the following response (HTTP status code 233):
+The chameleon server MUST identify this special request, and, instead of attempting to serve content or forwarding it to an upstream site, it MUST authenticate the client using the provided information. If authentication is successful, the server MUST send the following response:
 
 ```
-:status: 233 HyOK
-Hysteria-UDP: [true/false]
-Hysteria-CC-RX: [uint/"auto"]
-Hysteria-Padding: [string]
+:status: 200
+Cham-UDP: [true/false]
+Cham-CC-RX: [uint/"auto"]
+Cham-Padding: [string]
 ```
 
-`Hysteria-UDP`: Whether the server supports UDP relay.
+`Cham-UDP`: Whether the server supports UDP relay.
 
-`Hysteria-CC-RX`: Server's maximum receive rate in bytes per second. A value of 0 indicates unlimited; "auto" indicates the server refuses to provide a value and ask the client to use congestion control to determine the rate on its own.
+`Cham-CC-RX`: Server's maximum receive rate in bytes per second. A value of 0 indicates unlimited; "auto" indicates the server refuses to provide a value and ask the client to use congestion control to determine the rate on its own.
 
-`Hysteria-Padding`: A random padding string of variable length.
+`Cham-Padding`: A random padding string of variable length.
 
-See the Congestion Control section for more information on how to use the `Hysteria-CC-RX` values.
+See the Congestion Control section for more information on how to use the `Cham-CC-RX` values.
 
-`Hysteria-Padding` is optional and is only intended to obfuscate the request/response pattern. It SHOULD be ignored by both sides.
+`Cham-Padding` is optional and is only intended to obfuscate the request/response pattern. It SHOULD be ignored by both sides.
 
 If authentication fails, the server MUST either act like a standard web server that does not understand the request, or in the case of being a reverse proxy, forward the request to the upstream site and return the response to the client.
 
-The client MUST check the status code to determine if the authentication was successful. If the status code is anything other than 233, the client MUST consider authentication to have failed and disconnect from the server.
+A successful authentication answers a plain `200`, not a distinctive status code. Hysteria, which this protocol descends from, answered `233`; no real web server does, so a censor who buys a subscription and probes with credentials that work can identify the server from one response. The cost of using `200` is that the status code alone no longer identifies the peer, because the masquerade handler may also answer `200`. Therefore the client MUST treat the response as successful only if the status code is `200` **and** `Cham-UDP` is present. A `200` without `Cham-UDP` MUST be treated as an authentication failure.
 
-After (and only after) a client passes authentication, the server MUST consider this QUIC connection to be a Hysteria proxy connection. It MUST then start processing proxy requests from the client as described in the next section.
+Note that renaming the headers relative to Hysteria only moves the target: `Cham-*` is still a fixed string that a censor holding valid credentials can match on. Deriving the header names from the pre-shared key is the actual fix and is not yet implemented.
+
+After (and only after) a client passes authentication, the server MUST consider this QUIC connection to be a chameleon proxy connection. It MUST then start processing proxy requests from the client as described in the next section.
 
 ## Proxy Requests
 
@@ -118,7 +120,7 @@ For packets that are not fragmented, the Fragment Count MUST be set to 1. In thi
 
 ## Congestion Control
 
-A unique feature of Hysteria is the ability to set the tx/rx (upload/download) rate on the client side. During authentication, the client sends its rx rate to the server via the `Hysteria-CC-RX` header. The server can use this to determine its transmission rate to the client, and vice versa by returning its rx rate to the client through the same header.
+A unique feature of chameleon is the ability to set the tx/rx (upload/download) rate on the client side. During authentication, the client sends its rx rate to the server via the `chameleon-CC-RX` header. The server can use this to determine its transmission rate to the client, and vice versa by returning its rx rate to the client through the same header.
 
 Three special cases are:
 
@@ -128,7 +130,7 @@ Three special cases are:
 
 ## "Salamander" Obfuscation
 
-The Hysteria protocol supports an optional obfuscation layer codenamed "Salamander".
+The chameleon protocol supports an optional obfuscation layer codenamed "Salamander".
 
 "Salamander" encapsulates all QUIC packets in the following format:
 

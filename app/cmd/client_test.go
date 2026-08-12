@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/apernet/hysteria/core/v2/client"
+	"github.com/chameleon-protocol/chameleon/core/v2/client"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/spf13/viper"
@@ -165,7 +165,7 @@ func TestClientConfigURI(t *testing.T) {
 		config *clientConfig
 	}{
 		{
-			uri:   "hysteria2://god@zilla.jp/",
+			uri:   "chameleon://god@zilla.jp/",
 			uriOK: true,
 			config: &clientConfig{
 				Server: "zilla.jp",
@@ -173,7 +173,7 @@ func TestClientConfigURI(t *testing.T) {
 			},
 		},
 		{
-			uri:   "hysteria2://john:wick@continental.org:4443/",
+			uri:   "chameleon://john:wick@continental.org:4443/",
 			uriOK: true,
 			config: &clientConfig{
 				Server: "continental.org:4443",
@@ -181,7 +181,7 @@ func TestClientConfigURI(t *testing.T) {
 			},
 		},
 		{
-			uri:   "hysteria2://saul@better.call:7000-10000,20000/",
+			uri:   "chameleon://saul@better.call:7000-10000,20000/",
 			uriOK: true,
 			config: &clientConfig{
 				Server: "better.call:7000-10000,20000",
@@ -189,7 +189,7 @@ func TestClientConfigURI(t *testing.T) {
 			},
 		},
 		{
-			uri:   "hysteria2://noauth.com/?ech=AAj%2BDQAEAAAAAA%3D%3D&insecure=1&obfs=salamander&obfs-password=66ccff&pinSHA256=deadbeef&sni=crap.cc",
+			uri:   "chameleon://noauth.com/?ech=AAj%2BDQAEAAAAAA%3D%3D&insecure=1&obfs=salamander&obfs-password=66ccff&pinSHA256=deadbeef&sni=crap.cc",
 			uriOK: true,
 			config: &clientConfig{
 				Server: "noauth.com",
@@ -209,7 +209,7 @@ func TestClientConfigURI(t *testing.T) {
 			},
 		},
 		{
-			uri:   "hysteria2://pw@geckotown.com:8443/?obfs=gecko&obfs-password=hidden",
+			uri:   "chameleon://pw@geckotown.com:8443/?obfs=gecko&obfs-password=hidden",
 			uriOK: true,
 			config: &clientConfig{
 				Server: "geckotown.com:8443",

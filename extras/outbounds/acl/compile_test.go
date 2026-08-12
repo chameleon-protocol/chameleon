@@ -5,7 +5,7 @@ import (
 	"net"
 	"testing"
 
-	"github.com/apernet/hysteria/extras/v2/outbounds/acl/v2geo"
+	"github.com/chameleon-protocol/chameleon/extras/v2/outbounds/acl/v2geo"
 
 	"github.com/stretchr/testify/assert"
 )

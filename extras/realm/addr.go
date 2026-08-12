@@ -22,7 +22,7 @@ var (
 	ErrInvalidAddr   = errors.New("invalid realm address")
 )
 
-// Addr is a parsed Hysteria Realms rendezvous address.
+// Addr is a parsed chameleon Realms rendezvous address.
 type Addr struct {
 	// Scheme is either SchemeHTTPS or SchemeHTTP.
 	Scheme string

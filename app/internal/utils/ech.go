@@ -13,7 +13,7 @@ import (
 
 // ECH (Encrypted Client Hello) helpers.
 //
-// Hysteria does not generate ECH keys itself. Users create a key pair with
+// chameleon does not generate ECH keys itself. Users create a key pair with
 // `sing-box generate ech-keypair <public_name>`, which emits two PEM blocks:
 //
 //	-----BEGIN ECH KEYS-----      (private, kept on the server)

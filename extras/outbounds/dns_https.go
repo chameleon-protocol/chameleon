@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/apernet/hysteria/extras/v2/outbounds/tinydoh"
+	"github.com/chameleon-protocol/chameleon/extras/v2/outbounds/tinydoh"
 )
 
 // dohResolver is a PluggableOutbound DNS resolver that resolves hostnames

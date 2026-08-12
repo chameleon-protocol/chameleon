@@ -6,9 +6,9 @@ import (
 	"net"
 	"time"
 
-	"github.com/apernet/hysteria/core/v2/errors"
-	"github.com/apernet/hysteria/core/v2/internal/congestion"
-	"github.com/apernet/hysteria/core/v2/internal/pmtud"
+	"github.com/chameleon-protocol/chameleon/core/v2/errors"
+	"github.com/chameleon-protocol/chameleon/core/v2/internal/congestion"
+	"github.com/chameleon-protocol/chameleon/core/v2/internal/pmtud"
 )
 
 const (

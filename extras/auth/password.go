@@ -3,7 +3,7 @@ package auth
 import (
 	"net"
 
-	"github.com/apernet/hysteria/core/v2/server"
+	"github.com/chameleon-protocol/chameleon/core/v2/server"
 )
 
 var _ server.Authenticator = &PasswordAuthenticator{}

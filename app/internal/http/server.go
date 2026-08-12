@@ -12,14 +12,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/apernet/hysteria/core/v2/client"
+	"github.com/chameleon-protocol/chameleon/core/v2/client"
 )
 
 const (
 	httpClientTimeout = 10 * time.Second
 )
 
-// Server is an HTTP server using a Hysteria client as outbound.
+// Server is an HTTP server using a chameleon client as outbound.
 type Server struct {
 	HyClient    client.Client
 	AuthFunc    func(username, password string) bool // nil = no authentication

@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/apernet/hysteria/extras/v2/outbounds/acl"
+	"github.com/chameleon-protocol/chameleon/extras/v2/outbounds/acl"
 )
 
 const (

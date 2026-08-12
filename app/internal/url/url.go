@@ -10,7 +10,7 @@ package url
 // search old issues for history on decisions. Unit tests should also
 // contain references to issue numbers with details.
 
-// Hysteria fork note: This file is grabbed from the standard Go library,
+// chameleon fork note: This file is grabbed from the standard Go library,
 // but with a few modifications to make it support our special port format
 // when using port hopping.
 

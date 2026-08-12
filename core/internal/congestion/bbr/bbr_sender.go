@@ -12,7 +12,7 @@ import (
 	"github.com/apernet/quic-go/congestion"
 	"github.com/apernet/quic-go/monotime"
 
-	"github.com/apernet/hysteria/core/v2/internal/congestion/common"
+	"github.com/chameleon-protocol/chameleon/core/v2/internal/congestion/common"
 )
 
 // BbrSender implements BBR congestion control algorithm.  BBR aims to estimate
@@ -39,7 +39,7 @@ const (
 	// The newly derived CWND gain for STARTUP, 2.
 	derivedHighCWNDGain = 2.0
 
-	debugEnv = "HYSTERIA_BBR_DEBUG"
+	debugEnv = "CHAMELEON_BBR_DEBUG"
 )
 
 // The cycle of gains used during the PROBE_BW stage.

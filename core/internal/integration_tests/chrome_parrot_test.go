@@ -5,16 +5,16 @@ import (
 	"net"
 	"testing"
 
-	"github.com/apernet/hysteria/core/v2/client"
-	"github.com/apernet/hysteria/core/v2/internal/integration_tests/mocks"
-	"github.com/apernet/hysteria/core/v2/server"
+	"github.com/chameleon-protocol/chameleon/core/v2/client"
+	"github.com/chameleon-protocol/chameleon/core/v2/internal/integration_tests/mocks"
+	"github.com/chameleon-protocol/chameleon/core/v2/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
 
-// TestClientServerChromeParrot runs a real Hysteria client/server pair both with
+// TestClientServerChromeParrot runs a real chameleon client/server pair both with
 // the Chrome handshake fingerprint (the default) and with it turned off, proving
-// each works end to end through Hysteria's own config plumbing rather than only
+// each works end to end through chameleon's own config plumbing rather than only
 // at the quic-go layer.
 func TestClientServerChromeParrot(t *testing.T) {
 	tests := []struct {
