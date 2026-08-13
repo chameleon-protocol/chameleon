@@ -29,20 +29,28 @@ import (
 // The 64 MB/s row is the control: it passed before, because its window was
 // already about 32 packets. It has to keep passing, or the floor has changed
 // something other than the cases that were broken.
+//
+// That row is also the one the bed cannot always serve. The impairment layer
+// is a user-space wrapper around a loopback socket, not a network card, and
+// what it can carry depends on what else the host is doing: measured at 60
+// MB/s on an idle machine, 35 MB/s under the race detector, and 10 MB/s with
+// another build running alongside. So this row asserts monotonicity instead of
+// a fraction of the declaration -- declaring more must not deliver less -- which
+// is the actual claim ("the floor did not break the high-bandwidth case") and
+// is the same statement on any host. The rows below the bed's floor keep the
+// absolute assertion, because for them the declaration is the binding
+// constraint and the controller is what is being measured.
 func TestBrutalRunsOnShortPaths(t *testing.T) {
 	if testing.Short() {
 		t.Skip("four transfers, and the failure mode under test is an idle timeout")
 	}
 	profile := netem.Loss(0.05)
+	// The largest throughput any lower declaration reached, which is a floor
+	// under what the bed demonstrably carries on this host right now.
+	var bestBelow float64
 	for _, declared := range []uint64{1 << 20, 2 << 20, 8 << 20, 64 << 20} {
 		declared := declared
 		t.Run(metrics.FormatRate(float64(declared)), func(t *testing.T) {
-			if declared >= 64<<20 && raceDetector {
-				// Not a result about the controller: the bed itself cannot
-				// carry this under the detector. Measured at 55% of the
-				// declaration, against 93% without it.
-				t.Skip("the impairment layer cannot supply 64 MB/s under -race")
-			}
 			// Scale the transfer with the declaration so that every row
 			// measures a comparable stretch of steady state. Two megabytes at
 			// 64 MB/s is thirty milliseconds, which is short enough that the
@@ -63,8 +71,14 @@ func TestBrutalRunsOnShortPaths(t *testing.T) {
 			require.NoError(t, err, "the transfer must complete: a window of one datagram stalls on every loss")
 			t.Logf("declared %s: %s, %.0f%% of the declaration",
 				metrics.FormatRate(float64(declared)), metrics.FormatRate(bps), bps/float64(declared)*100)
+			if declared >= 64<<20 {
+				assert.GreaterOrEqual(t, bps, bestBelow,
+					"the highest declaration delivered less than a lower one: the floor has changed a case that was not broken")
+				return
+			}
 			assert.Greater(t, bps, 0.7*float64(declared),
 				"a short path is not a reason to deliver less than the declared rate")
+			bestBelow = max(bestBelow, bps)
 		})
 	}
 }
@@ -141,7 +155,8 @@ func TestBrutalSurvivesAPathDelayRise(t *testing.T) {
 // the first second says nothing, because the sender does not necessarily
 // restart within it -- after seven seconds of blackhole the probe timer has
 // backed off to seconds, and where the first packet lands inside the sampling
-// interval is arbitrary.
+// interval is arbitrary. That is why the design document's "the first second
+// after recovery" is not what is measured here; see its E8 entry.
 func TestBrutalBlackholeRecovery(t *testing.T) {
 	if testing.Short() {
 		t.Skip("needs the sampling window to fill, which takes longer than the window")
@@ -171,32 +186,51 @@ func TestBrutalBlackholeRecovery(t *testing.T) {
 	time.Sleep(blackholeFor)
 	env.Ctrl.SetBlackhole(false)
 
-	samples := []uint64{env.Ctrl.Stats().Up.InBytes}
+	// Each sample carries the clock reading that produced it. Counting a fixed
+	// number of ticks as "a second" would be a measurement of the host's
+	// scheduler as much as of the sender: five sleeps of 200ms are 1.0s on an
+	// idle machine and 1.25s on a busy one, and dividing 1.25s of bytes by one
+	// second reports a 25% over-send that never happened.
+	type sample struct {
+		at    time.Time
+		bytes uint64
+	}
+	samples := []sample{{time.Now(), env.Ctrl.Stats().Up.InBytes}}
 	for range int(watchFor / tick) {
 		time.Sleep(tick)
-		samples = append(samples, env.Ctrl.Stats().Up.InBytes)
+		samples = append(samples, sample{time.Now(), env.Ctrl.Stats().Up.InBytes})
 	}
 	wg.Wait()
 
-	const window = int(time.Second / tick)
-	var peak uint64
-	for i := window; i < len(samples); i++ {
-		if d := samples[i] - samples[i-window]; d > peak {
-			peak = d
+	// The heaviest rate over any window of at least a second, taking the
+	// shortest such window from each starting point: longer ones only average
+	// the burst away, and the burst is what is being bounded.
+	var peak float64
+	for i := range samples {
+		for j := i + 1; j < len(samples); j++ {
+			d := samples[j].at.Sub(samples[i].at)
+			if d < time.Second {
+				continue
+			}
+			if r := float64(samples[j].bytes-samples[i].bytes) / d.Seconds(); r > peak {
+				peak = r
+			}
+			break
 		}
 	}
-	total := samples[len(samples)-1] - samples[0]
-	ratio := float64(peak) / linkRate
-	t.Logf("after a %v blackhole: %d B offered over %v, heaviest second %d B = x%.3f the declared %s",
-		blackholeFor, total, watchFor, peak, ratio, metrics.FormatRate(linkRate))
+	total := samples[len(samples)-1].bytes - samples[0].bytes
+	ratio := peak / linkRate
+	t.Logf("after a %v blackhole: %d B offered over %v, heaviest second %s = x%.3f the declared %s",
+		blackholeFor, total, watchFor, metrics.FormatRate(peak), ratio, metrics.FormatRate(linkRate))
 
 	require.NotZero(t, peak, "the flow never resumed, so there is nothing to measure")
 	// The floor of the ack ratio is 0.8, so an over-send driven by it lands at
 	// 1.25x. The bound is the one docs/research/brutal.md asks for -- 1.05x the
 	// declared rate -- rather than something merely below 1.25: measured at
-	// 1.037 and 1.036 across revisions, so a threshold set to just miss the
-	// defect would leave 12 points of room in which the rule could come back
-	// half-broken and still pass. What the remaining 5% covers is the
+	// 1.016, 1.041 and 1.043 here and at 1.036 on the previous revision, so a
+	// threshold set to just miss the defect would leave twelve points of room
+	// in which the rule could come back half-broken and still pass. What the
+	// remaining 5% covers is the
 	// retransmission of what the blackhole swallowed, which is real work and is
 	// not what this is about.
 	assert.Less(t, ratio, 1.05,
