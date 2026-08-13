@@ -56,7 +56,7 @@ func newUDPSessionEntry(
 ) (e *udpSessionEntry) {
 	e = &udpSessionEntry{
 		ID:   id,
-		D:    &frag.Defragger{},
+		D:    frag.NewDefragger(),
 		Last: utils.NewAtomicTime(time.Now()),
 		IO:   io,
 

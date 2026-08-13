@@ -155,7 +155,7 @@ func (m *udpSessionManager) NewUDP() (HyUDPConn, error) {
 
 	conn := &udpConn{
 		ID:        id,
-		D:         &frag.Defragger{},
+		D:         frag.NewDefragger(),
 		ReceiveCh: make(chan *protocol.UDPMessage, udpMessageChanSize),
 		SendBuf:   make([]byte, protocol.MaxUDPSize),
 		SendFunc:  m.io.SendMessage,
