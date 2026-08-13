@@ -58,3 +58,9 @@ jobs:
       - name: Test app
         working-directory: app
         run: go test -v -count=1 ./...
+
+      - name: Test testbed
+        working-directory: tests
+        # The end-to-end profiles spend real seconds waiting out QUIC timeouts
+        # and impaired transfers, so give them room beyond the 10m default.
+        run: go test -v -count=1 -timeout 30m ./...
