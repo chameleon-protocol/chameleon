@@ -204,7 +204,7 @@ func TestUDPSessionManagerLargePayload(t *testing.T) {
 		t.Run(strconv.Itoa(payloadLen), func(t *testing.T) {
 			io := newMockUDPIO(t)
 			eventLogger := newMockUDPEventLogger(t)
-			sm := newUDPSessionManager(io, eventLogger, 10*time.Second)
+			sm := newUDPSessionManager(io, eventLogger, nil, 10*time.Second)
 
 			msgCh := make(chan *protocol.UDPMessage, 1)
 			io.EXPECT().ReceiveMessage().RunAndReturn(func() (*protocol.UDPMessage, error) {

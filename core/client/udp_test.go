@@ -151,7 +151,7 @@ func TestUDPSessionManagerLargePayload(t *testing.T) {
 		dgrams = append(dgrams, append([]byte(nil), wire...))
 		return nil
 	})
-	sm := newUDPSessionManager(io)
+	sm := newUDPSessionManager(io, nil)
 
 	const addr = "large.payload.test:4433"
 	for _, payloadLen := range []int{1200, 4077, 4078, 4095, protocol.MaxUDPSize, protocol.MaxUDPSize + 1, 10000} {
