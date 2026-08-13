@@ -102,6 +102,38 @@ number:
 - Datagrams delivered but not read fast enough are dropped and counted as
   `Stats.Overflow`, separately from link loss. A result that depends on
   `Overflow` is measuring the harness, not the transport.
+- **TCP cross traffic is impossible and will stay impossible.** The layer wraps
+  a `net.PacketConn`; TCP does not go through one. A competing flow has to be a
+  second QUIC client (see below), not `iperf`.
+
+## Shared bottlenecks
+
+`Link.Rate` gives every `Conn` its own token bucket and its own queue, so two
+flows cannot take capacity from each other — which makes it useless for asking
+what an aggressive sender costs its neighbours, since the answer is fixed at
+"nothing" before the experiment starts.
+
+`netem.NewBottleneck(bytesPerSec, bufferDelay)` is one bucket and one buffer for
+every `Link` pointing at it. Reservations are served in call order, so the flows
+share the capacity in proportion to how hard each pushes, and a flow that keeps
+the buffer full makes its neighbour's datagrams tail-drop.
+
+```go
+up, down := netem.NewBottleneck(1<<20, 100*time.Millisecond), netem.NewBottleneck(1<<20, 100*time.Millisecond)
+p := netem.RTT(50 * time.Millisecond).WithSharedBottleneck(up, down)
+
+env := harness.New(t, harness.Options{Profile: p, Bandwidth: harness.Bandwidth{BytesPerSec: 2 << 20}})
+peer, _ := env.AddClient(p, seed, harness.Options{}) // no declaration -> BBR
+```
+
+Each flow needs its own `Controller`, because `Controller.Stats` sums every
+`Conn` it made and a shared one could not say which flow moved which bytes;
+`AddClient` makes one. Pass a separate `Bottleneck` per direction unless the
+point is a half-duplex medium.
+
+Always run the two-identical-controllers cell as a control. Whatever share two
+BBR flows get is the share the bed itself hands out, and a Brutal number only
+means something as a departure from it.
 
 ## Kernel mode
 
@@ -170,7 +202,31 @@ env := harness.New(t, harness.Options{Profile: netem.RTT(200 * time.Millisecond)
 bps, err := env.TCPThroughput(4<<20, 60*time.Second)
 samples, err := env.TCPLatency(100, 3, 2*time.Millisecond, 8*time.Second)
 f, err := env.MeasureFailover(6*time.Second, 2*time.Second, 30*time.Second)
+
+// Timestamped round trips, for a claim about how a number moves over a
+// transfer rather than what it averaged. Stop it when the load stops:
+// samples taken afterwards describe an idle link.
+series, err := env.LatencySeries(harness.Probe{
+	Count: 500, Gap: 100 * time.Millisecond, Payload: 100, Stop: done,
+})
+// Time-bounded rather than size-bounded, so two flows are comparable by the
+// bytes each moved over the same interval.
+n, err := env.TCPLoadFor(env.Client, 12*time.Second)
 ```
+
+## Baselines
+
+The `Baseline` tests are not assertions. They print tables, and the tables are
+what a change gets compared against:
+
+```sh
+go test ./e2e/ -run Baseline -v -timeout 30m           # end to end
+go test -C ../core ./internal/congestion/brutal/ -run Baseline -v
+```
+
+The second one exists because `ackRate` and the congestion window are internal
+to the core and this module cannot import them, so the numbers that decide
+Brutal's behaviour have to be taken by driving the controller directly.
 
 `env.Ctrl` changes the link while traffic is running — that is how failover is
 measured, and it applies to sockets the client creates later, so a reconnect

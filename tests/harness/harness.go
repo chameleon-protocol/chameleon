@@ -131,6 +131,23 @@ func TryNew(t testing.TB, opts Options) (*Env, error) {
 	udpEcho := startUDPEcho(t)
 
 	serverAddr := serverConn.LocalAddr()
+	c, err := dialClient(t, ctrl, serverAddr, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Env{
+		T:          t,
+		Ctrl:       ctrl,
+		Client:     c,
+		TCPEcho:    tcpEcho,
+		UDPEcho:    udpEcho,
+		ServerAddr: serverAddr,
+	}, nil
+}
+
+// dialClient brings up one client against serverAddr over ctrl's link.
+func dialClient(t testing.TB, ctrl *netem.Controller, serverAddr net.Addr, opts Options) (client.Client, error) {
 	configFunc := func() (*client.Config, error) {
 		return &client.Config{
 			ConnFactory: netem.ConnFactory{Controller: ctrl},
@@ -148,7 +165,10 @@ func TryNew(t testing.TB, opts Options) (*Env, error) {
 		}, nil
 	}
 
-	var c client.Client
+	var (
+		c   client.Client
+		err error
+	)
 	if opts.Reconnect {
 		c, err = client.NewReconnectableClient(configFunc, nil, false)
 	} else {
@@ -162,15 +182,35 @@ func TryNew(t testing.TB, opts Options) (*Env, error) {
 		return nil, err
 	}
 	t.Cleanup(func() { _ = c.Close() })
+	return c, nil
+}
 
-	return &Env{
-		T:          t,
-		Ctrl:       ctrl,
-		Client:     c,
-		TCPEcho:    tcpEcho,
-		UDPEcho:    udpEcho,
-		ServerAddr: serverAddr,
-	}, nil
+// Peer is a second client on the same server, with its own link and its own
+// counters.
+//
+// It exists so that two flows can be measured against each other. Each Peer
+// gets its own Controller, because Controller.Stats sums every Conn it made and
+// a shared one could not say which flow moved which bytes; the two Controllers
+// are made to share a bottleneck by pointing both profiles' Links at the same
+// netem.Bottleneck.
+type Peer struct {
+	Client client.Client
+	Ctrl   *netem.Controller
+}
+
+// AddClient brings up another client against the same server. The server's
+// bandwidth declaration is fixed when the Env comes up, so the negotiated rate
+// is min(server's, this client's): a Peer with a zero Bandwidth gets BBR
+// regardless of what the first client declared.
+func (e *Env) AddClient(profile netem.Profile, seed uint64, opts Options) (*Peer, error) {
+	e.T.Helper()
+	ctrl := netem.NewController(profile)
+	ctrl.SetSeed(seed)
+	c, err := dialClient(e.T, ctrl, e.ServerAddr, opts)
+	if err != nil {
+		return nil, err
+	}
+	return &Peer{Client: c, Ctrl: ctrl}, nil
 }
 
 type allowAll struct{}

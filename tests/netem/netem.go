@@ -50,6 +50,11 @@ type Link struct {
 	// that has decided to kill all UDP to a destination looks from the endpoint:
 	// writes keep succeeding, nothing ever comes back.
 	Blackhole bool
+
+	// Shared, when set, replaces Rate, Burst and Queue with a shaper that every
+	// Link pointing at the same Bottleneck contends for. It is the only way to
+	// put two flows behind one buffer; see bottleneck.go.
+	Shared *Bottleneck
 }
 
 const (
@@ -81,7 +86,7 @@ func (l Link) queueLimit() int {
 
 // clean reports whether the link can forward inline, without a scheduler.
 func (l Link) clean() bool {
-	return !l.Blackhole && l.Loss == 0 && l.Delay == 0 && l.Jitter == 0 && l.Rate == 0
+	return !l.Blackhole && l.Loss == 0 && l.Delay == 0 && l.Jitter == 0 && l.Rate == 0 && l.Shared == nil
 }
 
 func (l Link) String() string {
@@ -100,6 +105,9 @@ func (l Link) String() string {
 	}
 	if l.Rate > 0 {
 		parts = append(parts, fmt.Sprintf("rate=%dB/s", l.Rate))
+	}
+	if l.Shared != nil {
+		parts = append(parts, fmt.Sprintf("shared=%.0fB/s", l.Shared.rate))
 	}
 	if len(parts) == 0 {
 		return "clean"

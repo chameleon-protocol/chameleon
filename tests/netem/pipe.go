@@ -107,7 +107,19 @@ func (p *pipe) submit(data []byte, addr net.Addr) bool {
 		return false
 	}
 	release := now
-	if link.Rate > 0 {
+	switch {
+	case link.Shared != nil:
+		// The shared shaper has its own lock and its own buffer. Charging it
+		// while holding p.mu keeps the reservation order the same as the submit
+		// order for this pipe, which is what makes the queue a FIFO.
+		var ok bool
+		release, ok = link.Shared.reserve(now, n)
+		if !ok {
+			p.mu.Unlock()
+			p.drop(n)
+			return false
+		}
+	case link.Rate > 0:
 		release = p.reserve(now, n, link)
 	}
 	due := release.Add(p.draw(link))

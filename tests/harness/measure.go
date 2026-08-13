@@ -8,6 +8,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/chameleon-protocol/chameleon/core/v2/client"
 	coreErrs "github.com/chameleon-protocol/chameleon/core/v2/errors"
 
 	"github.com/chameleon-protocol/chameleon/tests/v2/metrics"
@@ -73,17 +74,87 @@ func (e *Env) TCPThroughput(size int, timeout time.Duration) (float64, error) {
 // fresh stream also pays for the proxy dialling the far end.
 func (e *Env) TCPLatency(count, warmup int, gap, timeout time.Duration) ([]time.Duration, error) {
 	e.T.Helper()
-	conn, err := e.Client.TCP(e.TCPEcho)
+	series, err := e.LatencySeries(Probe{
+		Count: count, Warmup: warmup, Gap: gap, Timeout: timeout,
+	})
+	if err != nil {
+		return nil, err
+	}
+	samples := make([]time.Duration, len(series))
+	for i, s := range series {
+		samples[i] = s.RTT
+	}
+	return samples, nil
+}
+
+// Probe describes a request/response load pattern. The zero Payload means the
+// small default; set it to model a particular application, such as the ~100
+// bytes an interactive shell sends per keystroke burst.
+type Probe struct {
+	Count   int
+	Warmup  int
+	Gap     time.Duration
+	Payload int
+	Timeout time.Duration
+
+	// Stop ends the probe early when it is closed. A probe running alongside a
+	// transfer has to stop when the transfer does: once the link goes idle the
+	// samples describe an empty pipe, and mixing those into a series about
+	// queueing turns the queue into an artefact of when the probe happened to
+	// finish. Count then only has to be an upper bound.
+	Stop <-chan struct{}
+}
+
+// LatencySample is one round trip and when it happened, measured from the first
+// non-warmup exchange.
+//
+// The timestamp is what separates a standing queue from a slow link: a
+// controller that builds one shows latency climbing with time, which a
+// percentile summary of the same samples cannot express.
+type LatencySample struct {
+	At  time.Duration
+	RTT time.Duration
+}
+
+// LatencySeries runs p and returns each round trip with the time it started.
+//
+// A round trip through the tunnel crosses the impaired link twice. Under a
+// symmetric profile the one-way delay is half of it, but only in the mean:
+// nothing here can separate the two directions, so a one-way figure derived
+// from these samples is an assumption, not a measurement.
+func (e *Env) LatencySeries(p Probe) ([]LatencySample, error) {
+	e.T.Helper()
+	return latencySeries(e.Client, e.TCPEcho, p)
+}
+
+// PeerLatencySeries is LatencySeries over a second flow's link.
+func (e *Env) PeerLatencySeries(peer *Peer, p Probe) ([]LatencySample, error) {
+	e.T.Helper()
+	return latencySeries(peer.Client, e.TCPEcho, p)
+}
+
+func latencySeries(c client.Client, echo string, p Probe) ([]LatencySample, error) {
+	size := p.Payload
+	if size <= 0 {
+		size = probePayload
+	}
+	conn, err := c.TCP(echo)
 	if err != nil {
 		return nil, fmt.Errorf("open tunnel: %w", err)
 	}
 	defer conn.Close()
 
-	payload := make([]byte, probePayload)
-	buf := make([]byte, probePayload)
-	samples := make([]time.Duration, 0, count)
-	for i := 0; i < warmup+count; i++ {
-		if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+	payload := make([]byte, size)
+	buf := make([]byte, size)
+	samples := make([]LatencySample, 0, p.Count)
+	var origin time.Time
+	for i := 0; i < p.Warmup+p.Count; i++ {
+		select {
+		case <-p.Stop:
+			return samples, nil
+		default:
+		}
+		if err := conn.SetDeadline(time.Now().Add(p.Timeout)); err != nil {
 			return nil, err
 		}
 		start := time.Now()
@@ -93,14 +164,73 @@ func (e *Env) TCPLatency(count, warmup int, gap, timeout time.Duration) ([]time.
 		if _, err := io.ReadFull(conn, buf); err != nil {
 			return nil, fmt.Errorf("exchange %d: read: %w", i, err)
 		}
-		if i >= warmup {
-			samples = append(samples, time.Since(start))
+		if i >= p.Warmup {
+			if origin.IsZero() {
+				origin = start
+			}
+			samples = append(samples, LatencySample{At: start.Sub(origin), RTT: time.Since(start)})
 		}
-		if gap > 0 {
-			time.Sleep(gap)
+		if p.Gap > 0 {
+			time.Sleep(p.Gap)
 		}
 	}
 	return samples, nil
+}
+
+// TCPLoadFor streams through the tunnel for d and returns how many payload
+// bytes came back.
+//
+// It is bounded by time where TCPThroughput is bounded by size, which is what a
+// fairness measurement needs: two flows that ran over the same interval are
+// comparable by the bytes each moved, whereas two fixed-size transfers finish
+// at different times and stop competing partway through.
+func (e *Env) TCPLoadFor(c client.Client, d time.Duration) (int64, error) {
+	e.T.Helper()
+	conn, err := c.TCP(e.TCPEcho)
+	if err != nil {
+		return 0, fmt.Errorf("open tunnel: %w", err)
+	}
+	defer conn.Close()
+	deadline := time.Now().Add(d)
+	if err := conn.SetDeadline(deadline.Add(2 * time.Second)); err != nil {
+		return 0, err
+	}
+
+	chunk := make([]byte, throughputChunk)
+	if _, err := rand.Read(chunk); err != nil {
+		return 0, err
+	}
+	stop := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if time.Now().After(deadline) {
+				return
+			}
+			if _, err := conn.Write(chunk); err != nil {
+				return
+			}
+		}
+	}()
+
+	var got int64
+	buf := make([]byte, throughputChunk)
+	for time.Now().Before(deadline) {
+		if err := conn.SetReadDeadline(deadline); err != nil {
+			break
+		}
+		n, err := conn.Read(buf)
+		got += int64(n)
+		if err != nil {
+			break
+		}
+	}
+	close(stop)
+	return got, nil
 }
 
 // Echo runs one small request/response exchange through the tunnel and reports
