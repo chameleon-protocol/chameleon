@@ -46,6 +46,27 @@ type Options struct {
 	// anything about recovery: a plain client is dead once its QUIC connection
 	// is.
 	Reconnect bool
+
+	// Bandwidth declares a rate on both ends, which is the only way to get the
+	// Brutal congestion controller installed: the core falls back to the
+	// configured controller (BBR) whenever either side's declaration is zero.
+	// Without this an Env measures BBR no matter what the profile says.
+	Bandwidth Bandwidth
+}
+
+// Bandwidth is what both ends declare to each other during authentication. The
+// negotiated send rate is min(peer's Rx, own Tx) on each side, so setting Tx
+// and Rx to the same value on both ends makes the declared rate exactly that
+// value in both directions.
+type Bandwidth struct {
+	// BytesPerSec is the rate both ends declare. Zero leaves Brutal out and the
+	// connection on the configured controller. The core rejects anything below
+	// 65536.
+	BytesPerSec uint64
+
+	// DisableLossCompensation turns off Brutal's ackRate divisor on both ends,
+	// which is the A/B switch for the loss-compensation behaviour.
+	DisableLossCompensation bool
 }
 
 // Env is a running server, client and echo server, plus the handle that
@@ -90,8 +111,13 @@ func TryNew(t testing.TB, opts Options) (*Env, error) {
 		t.Fatalf("listen server socket: %v", err)
 	}
 	sv, err := server.NewServer(&server.Config{
-		TLSConfig:     server.TLSConfig{Certificates: []tls.Certificate{selfSignedCert(t)}},
-		QUICConfig:    server.QUICConfig{MaxIdleTimeout: opts.MaxIdleTimeout},
+		TLSConfig:  server.TLSConfig{Certificates: []tls.Certificate{selfSignedCert(t)}},
+		QUICConfig: server.QUICConfig{MaxIdleTimeout: opts.MaxIdleTimeout},
+		BandwidthConfig: server.BandwidthConfig{
+			MaxTx:                   opts.Bandwidth.BytesPerSec,
+			MaxRx:                   opts.Bandwidth.BytesPerSec,
+			DisableLossCompensation: opts.Bandwidth.DisableLossCompensation,
+		},
 		Conn:          serverConn,
 		Authenticator: allowAll{},
 	})
@@ -113,6 +139,11 @@ func TryNew(t testing.TB, opts Options) (*Env, error) {
 			QUICConfig: client.QUICConfig{
 				MaxIdleTimeout:  opts.MaxIdleTimeout,
 				KeepAlivePeriod: opts.KeepAlivePeriod,
+			},
+			BandwidthConfig: client.BandwidthConfig{
+				MaxTx:                   opts.Bandwidth.BytesPerSec,
+				MaxRx:                   opts.Bandwidth.BytesPerSec,
+				DisableLossCompensation: opts.Bandwidth.DisableLossCompensation,
 			},
 		}, nil
 	}
