@@ -300,12 +300,19 @@ func runPunch(ctx context.Context, transport punchTransport, plan punchPlan) (Pu
 	nextTargets := now
 	nextProbe := now
 	probeDeadline := now.Add(plan.probeBudget)
+	// The attempt ends on our own clock rather than on ctx.Err(): the context
+	// reports its deadline a moment after it passes, and until it does, a loop
+	// waking on that same instant would spin.
+	punchDeadline := now.Add(plan.timeout)
 	probeIndex := 0
 	for {
 		if err := ctx.Err(); err != nil {
 			return PunchResult{}, plan.timeoutError(err)
 		}
 		now = time.Now()
+		if !now.Before(punchDeadline) {
+			return PunchResult{}, plan.timeoutError(context.DeadlineExceeded)
+		}
 		if !now.Before(nextTargets) {
 			for _, target := range plan.targets {
 				transport.send(target, PunchPacketHello, plan.key)
@@ -325,12 +332,20 @@ func runPunch(ctx context.Context, transport punchTransport, plan punchPlan) (Pu
 
 		// Wake for the next send that is actually due. Waking on a probe that
 		// the budget already ruled out would spin the loop.
-		deadline := nextTargets
+		deadline := punchDeadline
+		if nextTargets.Before(deadline) {
+			deadline = nextTargets
+		}
 		if probing && nextProbe.Before(deadline) {
 			deadline = nextProbe
 		}
 		if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
 			deadline = ctxDeadline
+		}
+		if !deadline.After(now) {
+			// A deadline that has already passed belongs to a clock we do not
+			// own. Wait a little rather than busy-looping until it catches up.
+			deadline = now.Add(time.Millisecond)
 		}
 		ev, ok, err := transport.recvUntil(ctx, deadline, plan.key)
 		if err != nil {
