@@ -683,10 +683,26 @@ func TestOnPathChange(t *testing.T) {
 		t.Errorf("without being told, a 16x round trip reads as a queue")
 	}
 
+	// Being told is not the same as knowing. One acknowledgement is one sample
+	// of a path nobody has measured, and the controller declines to resize
+	// itself from it -- see rebaseline, and the tests in
+	// brutal_rebaseline_test.go for why that sample cannot be trusted. Until
+	// the measurement is in, the window stays exactly where it was.
 	b.OnPathChange()
 	b.OnCongestionEventEx(0, monotime.Time(2*time.Second), make([]congestion.AckedPacketInfo, 100), nil)
-	if got := b.GetCongestionWindow(); got <= short {
-		t.Errorf("after a path change the window is %d, still at the old path's %d", got, short)
+	if got, ceiling := b.GetCongestionWindow(), congestion.ByteCount(cwndRTTClampK)*short; got != ceiling {
+		t.Errorf("one sample into the new path the window is %d; it may not move off the stale minimum's clamp at %d on the strength of one sample",
+			got, ceiling)
+	}
+	if !b.congested {
+		t.Errorf("one sample into the new path the delay gate has already reopened, on an estimate that is not yet a measurement")
+	}
+
+	// The measurement arrives, and now the window may follow the path.
+	feedRebaseline(b, rtt, monotime.Time(2*time.Second), 40, 25*time.Millisecond, 80*time.Millisecond)
+	if got := b.GetCongestionWindow(); got <= congestion.ByteCount(cwndRTTClampK)*short {
+		t.Errorf("after a path change the window is %d, still at the old path's clamped %d",
+			got, congestion.ByteCount(cwndRTTClampK)*short)
 	}
 	if b.congested {
 		t.Errorf("after a path change the new path's own round trip is not a queue")
