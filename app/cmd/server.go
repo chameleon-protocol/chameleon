@@ -484,17 +484,14 @@ func (c *serverConfig) startRealmServerRuntime(ctx context.Context, cancel conte
 		puncher:     puncher,
 		config:      c.Realm,
 		family:      family,
+		localPort:   localPort(punchConn.LocalAddr()),
 	}
 	// Gateway port mapping (UPnP/NAT-PMP) runs before STUN.
 	// With the pinhole in place, in a double-NAT setup,
 	// the address STUN observes corresponds to a path whose inner leg
 	// goes through the static mapping rather than a filtered dynamic one.
 	if c.Realm.PortMapping.Enabled {
-		localPort := 0
-		if udpAddr, ok := punchConn.LocalAddr().(*net.UDPAddr); ok {
-			localPort = udpAddr.Port
-		}
-		rt.mapper = newRealmPortMapper(ctx, addr.RealmID, localPort, c.Realm.PortMapping)
+		rt.mapper = newRealmPortMapper(ctx, addr.RealmID, int(rt.localPort), c.Realm.PortMapping)
 	}
 	cleanupMapper := func() {
 		if rt.mapper != nil {
@@ -548,6 +545,7 @@ type realmServerRuntime struct {
 	puncher     *realm.ServerPuncher
 	config      serverConfigRealm
 	family      realm.AddrFamily
+	localPort   uint16            // the punch socket's port, shared by every local candidate
 	mapper      *realm.PortMapper // nil if port mapping is disabled or failed
 
 	mu      sync.Mutex
@@ -776,14 +774,22 @@ func (r *realmServerRuntime) cachedAddrs() []netip.AddrPort {
 	}
 	addrs := append([]netip.AddrPort(nil), r.addrs...)
 	r.mu.Unlock()
-	return r.withMappedAddr(addrs)
+	return r.withCandidates(addrs)
 }
 
-func (r *realmServerRuntime) withMappedAddr(addrs []netip.AddrPort) []netip.AddrPort {
-	if r.mapper == nil {
-		return addrs
+// withCandidates turns a set of STUN-observed addresses into the set the
+// server announces: the gateway mapping, if any, plus the host's own
+// interface addresses.
+//
+// Only the reflexive addresses are cached in r.addrs; the local ones are
+// re-enumerated on every call, which is what makes a laptop that moves from
+// Wi-Fi to Ethernet republish on the next heartbeat without any extra
+// plumbing (the heartbeat compares the published list against the last one).
+func (r *realmServerRuntime) withCandidates(addrs []netip.AddrPort) []netip.AddrPort {
+	if r.mapper != nil {
+		addrs = mergeMappedAddr(addrs, r.mapper.ExternalAddr())
 	}
-	return mergeMappedAddr(addrs, r.mapper.ExternalAddr())
+	return withLocalCandidates(r.realmID, r.localPort, r.family, addrs)
 }
 
 func (r *realmServerRuntime) respond(ctx context.Context, ev *realm.PunchEvent) {
@@ -901,14 +907,14 @@ func (r *realmServerRuntime) refreshAddrsWith(ctx context.Context, discover func
 		zap.Strings("addresses", addrPortStrings(current)),
 		zap.Bool("changed", changed),
 		zap.String("duration", formatLogDuration(time.Since(start))))
-	return r.withMappedAddr(current), changed, nil
+	return r.withCandidates(current), changed, nil
 }
 
 func (r *realmServerRuntime) currentAddrs() []netip.AddrPort {
 	r.mu.Lock()
 	addrs := append([]netip.AddrPort(nil), r.addrs...)
 	r.mu.Unlock()
-	return r.withMappedAddr(addrs)
+	return r.withCandidates(addrs)
 }
 
 func sessionTTLDuration(ttl int) time.Duration {

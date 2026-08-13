@@ -339,22 +339,42 @@ func TestRealmSessionHelpers(t *testing.T) {
 }
 
 func TestRealmConnectAddrsCacheHit(t *testing.T) {
-	want := []netip.AddrPort{
+	cached := []netip.AddrPort{
 		netip.MustParseAddrPort("203.0.113.10:4433"),
 		netip.MustParseAddrPort("[2001:db8::1]:4433"),
 	}
 	rt := &realmServerRuntime{
-		addrs:   append([]netip.AddrPort(nil), want...),
+		addrs:   append([]netip.AddrPort(nil), cached...),
 		addrsAt: time.Now(),
 	}
 	got, err := rt.connectAddrs(context.Background())
 	assert.NoError(t, err)
-	assert.Equal(t, want, got)
+	// Announcing puts IPv6 first; the cache keeps what STUN reported.
+	assert.Equal(t, []netip.AddrPort{cached[1], cached[0]}, got)
 
 	// Cache should still hold the same values; no mutation through aliasing.
-	assert.Equal(t, want, rt.addrs)
+	assert.Equal(t, cached, rt.addrs)
 
 	// Mutating the returned slice must not affect the cached one.
 	got[0] = netip.MustParseAddrPort("198.51.100.1:1")
-	assert.Equal(t, want, rt.addrs)
+	assert.Equal(t, cached, rt.addrs)
+}
+
+// The addresses the server announces on connect are what a client on the same
+// LAN has to punch, so the local interface addresses must be in there, ahead
+// of the reflexive ones, without displacing them.
+func TestRealmConnectAddrsIncludeLocalCandidates(t *testing.T) {
+	reflexive := []netip.AddrPort{netip.MustParseAddrPort("203.0.113.10:4433")}
+	rt := &realmServerRuntime{
+		addrs:     append([]netip.AddrPort(nil), reflexive...),
+		addrsAt:   time.Now(),
+		localPort: 4433,
+	}
+	got, err := rt.connectAddrs(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, reflexive, got[len(got)-len(reflexive):], "reflexive addresses must come last")
+	for _, addr := range got[:len(got)-len(reflexive)] {
+		assert.False(t, addr.Addr().IsLoopback(), "loopback announced: %s", addr)
+		assert.Equal(t, rt.localPort, addr.Port())
+	}
 }
