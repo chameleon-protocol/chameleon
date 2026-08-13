@@ -2,6 +2,7 @@ package netem
 
 import (
 	"net"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 )
@@ -17,9 +18,16 @@ type Controller struct {
 	seed    uint64
 	nextID  atomic.Uint64
 
-	mu      sync.Mutex
-	live    map[*Conn]struct{}
-	retired Stats
+	// overrides is copy-on-write so that the per-datagram lookup takes no lock.
+	// nOverrides is read first and lets the case with no per-candidate rules --
+	// every test that predates them -- skip the map entirely.
+	overrides  atomic.Pointer[map[netip.AddrPort]Profile]
+	nOverrides atomic.Int64
+
+	mu         sync.Mutex
+	live       map[*Conn]struct{}
+	retired    Stats
+	retiredFor map[netip.AddrPort]Stats
 }
 
 // NewController returns a Controller serving the given profile.
@@ -48,6 +56,96 @@ func (c *Controller) SetBlackhole(on bool) {
 	c.Set(p.WithBlackhole(on))
 }
 
+// SetFor overrides the default profile for one candidate -- one peer address.
+// It is what makes a multi-candidate failover measurable: the test kills one
+// candidate and leaves the others alone, which is the whole scenario. Without
+// it every datagram a Conn carries gets the same treatment and "switch to the
+// leg that still works" cannot even be stated.
+//
+// A candidate under SetFor also gets counters of its own, readable through
+// StatsFor. That is the other half of the assertion: the profile says which leg
+// was supposed to die, the counters say which leg the traffic actually went to.
+//
+// Naming a candidate with the default profile is therefore a meaningful call --
+// it buys separate counters for a leg the test does not want to impair.
+//
+// The change takes effect on the next datagram, on Conns that already exist as
+// well as ones created later, exactly like Set.
+func (c *Controller) SetFor(peer netip.AddrPort, p Profile) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	next := make(map[netip.AddrPort]Profile)
+	if cur := c.overrides.Load(); cur != nil {
+		for k, v := range *cur {
+			next[k] = v
+		}
+	}
+	next[peer] = p
+	c.overrides.Store(&next)
+	c.nOverrides.Store(int64(len(next)))
+}
+
+// ClearFor puts a candidate back on the default profile.
+//
+// It does not undo the split: a Conn that has already given the candidate pipes
+// of its own keeps them, so StatsFor goes on counting and the candidate's
+// datagrams go on queueing separately from everyone else's. Only the impairment
+// reverts.
+func (c *Controller) ClearFor(peer netip.AddrPort) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cur := c.overrides.Load()
+	if cur == nil {
+		return
+	}
+	if _, ok := (*cur)[peer]; !ok {
+		return
+	}
+	next := make(map[netip.AddrPort]Profile, len(*cur)-1)
+	for k, v := range *cur {
+		if k != peer {
+			next[k] = v
+		}
+	}
+	c.overrides.Store(&next)
+	c.nOverrides.Store(int64(len(next)))
+}
+
+// ProfileFor returns the profile in force for one candidate: its own if SetFor
+// named it, the default otherwise.
+func (c *Controller) ProfileFor(peer netip.AddrPort) Profile {
+	if m := c.overrides.Load(); m != nil {
+		if p, ok := (*m)[peer]; ok {
+			return p
+		}
+	}
+	return c.Profile()
+}
+
+// StatsFor sums what crossed every Conn the controller has made, to and from
+// one candidate. It is zero for a candidate SetFor never named, because a Conn
+// only counts separately what it routes separately.
+func (c *Controller) StatsFor(peer netip.AddrPort) Stats {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	total := c.retiredFor[peer]
+	for conn := range c.live {
+		total = total.add(conn.StatsFor(peer))
+	}
+	return total
+}
+
+func (c *Controller) hasOverrides() bool { return c.nOverrides.Load() != 0 }
+
+func (c *Controller) tracked(peer netip.AddrPort) bool {
+	m := c.overrides.Load()
+	if m == nil {
+		return false
+	}
+	_, ok := (*m)[peer]
+	return ok
+}
+
 // Wrap puts inner behind the controller's link. The returned Conn owns inner.
 func (c *Controller) Wrap(inner net.PacketConn) *Conn {
 	id := c.nextID.Add(1)
@@ -66,6 +164,12 @@ func (c *Controller) retire(conn *Conn) {
 	}
 	delete(c.live, conn)
 	c.retired = c.retired.add(conn.Stats())
+	for peer, s := range conn.peerStats() {
+		if c.retiredFor == nil {
+			c.retiredFor = make(map[netip.AddrPort]Stats)
+		}
+		c.retiredFor[peer] = c.retiredFor[peer].add(s)
+	}
 }
 
 // Stats sums the counters of every Conn the controller has created, including

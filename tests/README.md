@@ -17,7 +17,7 @@ X%" was not a checkable claim.
 | `netem/` | The user-space impairment layer. Wraps a `net.PacketConn`; no root, works everywhere. **This is the main deliverable.** |
 | `netem/kernel/` | Optional driver for the real kernel shaper (`tc`/netem on Linux, dummynet on macOS). Needs root, opt-in, skipped by default. |
 | `metrics/` | Percentiles, throughput, regression arithmetic. |
-| `harness/` | Brings up a core server + client over an impaired link, and measures throughput, latency and failover. |
+| `harness/` | Brings up a core server + client over an impaired link, and measures throughput, latency and failover. `multipath.go` gives one server several candidate addresses. |
 | `e2e/` | End-to-end tests and benchmarks built on the harness. |
 
 ## Running
@@ -135,6 +135,94 @@ Always run the two-identical-controllers cell as a control. Whatever share two
 BBR flows get is the share the bed itself hands out, and a Brutal number only
 means something as a departure from it.
 
+## Candidates: several paths to one server
+
+A criterion about failover is a statement about several paths at once — "the
+candidate in use died, the connection moved to one that did not". Two things
+make that expressible.
+
+**`Ctrl.SetFor(peer, profile)` impairs one candidate.** Without it the profile
+covers the whole socket, so "candidate A is dead and candidate B is fine" cannot
+be said at all.
+
+```go
+env := harness.New(t, harness.Options{Candidates: 3})
+for _, leg := range env.Paths.Legs {
+	env.Ctrl.SetFor(leg.Key(), netem.RTT(50*time.Millisecond))
+}
+env.Ctrl.SetFor(env.Paths.Legs[0].Key(), netem.Blocked())   // kill the one in use
+env.Ctrl.ClearFor(env.Paths.Legs[0].Key())                  // back to the default profile
+stats := env.Ctrl.StatsFor(env.Paths.Legs[2].Key())         // did the traffic actually move?
+```
+
+A candidate is identified here by its **peer address** — the destination of a
+datagram going up, the source of one coming down. The alternatives do not work:
+one client socket reaches every candidate at once and is thrown away on every
+reconnect, so the local socket cannot name a candidate, and a synthetic index
+has nowhere to live in `net.PacketConn`. The peer address is the only thing
+present symmetrically at both ends of the interface this layer implements, and
+it is also what a Selector chooses between, so a test and the code under test
+name the same object. The consequence: two candidates that differ only in
+something invisible here — the same server address reached over two local
+interfaces — are one candidate.
+
+`SetFor` also gives a candidate counters of its own, read back with `StatsFor`.
+That is the other half of an assertion: the profile says which leg was supposed
+to die, the counters say which leg the traffic actually took. Naming a candidate
+with the *default* profile is therefore a meaningful call — it buys separate
+counters for a leg the test does not want to impair. A candidate no `SetFor` ever
+named reports zero from `StatsFor`; its traffic is in `Stats()` along with
+everyone else's.
+
+Each candidate gets its own pipes, so a datagram held up on a slow leg does not
+delay one on a fast leg, and each leg's loss draws come from a stream derived
+from the seed and the address — reproducible, and unchanged by adding another
+candidate. `ClearFor` reverts the impairment but not the split, so counters
+carry on across it.
+
+**`harness.MultiPath` gives one server several addresses.** `Options.Candidates`
+puts N forwarding legs on `127.0.0.1` in front of the server socket. The server
+sees a distinct source address per leg — the shape a candidate set has on the
+wire — while there is still one server, one certificate, one authenticator. It
+is a forwarder rather than several listeners because `core/server` takes exactly
+one `Conn`; several is a P2 change.
+
+```go
+env := harness.New(t, harness.Options{Candidates: 3})  // client dials Legs[0]
+env.Paths.Legs[1].Addr()                               // what a candidate looks like
+env.Paths.Legs[1].Stats().FromServer                   // where the server is answering
+env.Paths.Legs[0].RewriteSourceTo(env.Paths.Legs[1])   // on-path source rewriting
+```
+
+`RewriteSourceTo` is the reason this is a forwarder we own rather than a real
+multi-homed setup: it puts a leg's datagrams on another leg's socket, so the
+server sees a different source for packets that are otherwise entirely genuine —
+not forged, not replayed, not modified. That is an on-path attacker, and the
+server's reaction to one is a security property. `TestUnfilteredPathFollowIsHijackable`
+holds the current answer: the server follows, unconditionally, and neither
+endpoint notices. It is not asserting that this is correct — it is the recorded
+evidence that the design's `PathChangeFilter` has a reason to exist.
+
+**Do not build any of this on `extras/transport/udphop`.** Its `PacketConn` lies
+to the layer above in both directions: `ReadFrom` returns the constant `u.Addr`
+instead of the datagram's real source, and `WriteTo` ignores its `addr` argument
+entirely — see the *"Skip the check for now, always write to the server"* comment
+in `conn.go`. A bed whose whole job is telling candidates apart by address
+cannot stand on a conn that erases the address. Port hopping is a candidate
+*generation* strategy; it is not a multi-path abstraction.
+
+Two limits worth knowing before writing a test against this:
+
+- **There is no Selector yet.** `core/client` dials a single `ServerAddr`, so the
+  extra legs are reachable but unused, and killing the one in use kills the
+  client — `TestBlackholingTheCandidateInUseStrandsTheClient` records exactly
+  that, and `TestFailoverToLivingCandidate` is the same scenario written out and
+  skipped, waiting for `extras/realm/selector.go`.
+- **A `MultiPath` assumes one client.** The legs share the client address they
+  relay back to, which is what lets a leg used only as a forged source still
+  reach the client. A second client through the same `MultiPath` would take the
+  first one's return traffic.
+
 ## Kernel mode
 
 For results that must survive contact with the real datapath, `netem/kernel`
@@ -171,7 +259,8 @@ The macOS path has not been exercised — this machine cannot run it without roo
 | Where | Why |
 | --- | --- |
 | `TestKernelNetemMatchesUserspace` | Always skipped unless kernel mode is enabled, as above. |
-| `TestFullyBlockedUDPPreventsConnection`, `TestFailoverAfterUDPBlackhole` | Skipped under `-short`: they spend real seconds waiting out QUIC's handshake and idle timeouts, which is the thing being measured. |
+| `TestFullyBlockedUDPPreventsConnection`, `TestFailoverAfterUDPBlackhole`, `TestBlackholingTheCandidateInUseStrandsTheClient` | Skipped under `-short`: they spend real seconds waiting out QUIC's handshake and idle timeouts, which is the thing being measured. |
+| `TestFailoverToLivingCandidate` | Always skipped: there is no Selector, so nothing can move a connection between candidates. It is written out in full as the landing point for P1b. |
 
 ## Indicative numbers
 
@@ -230,4 +319,6 @@ Brutal's behaviour have to be taken by driving the controller directly.
 
 `env.Ctrl` changes the link while traffic is running — that is how failover is
 measured, and it applies to sockets the client creates later, so a reconnect
-lands on the same conditions.
+lands on the same conditions. `SetFor` and `StatsFor` behave the same way, and
+their per-candidate counters survive a socket close: the numbers that prove
+where the traffic went have to outlive the reconnect they are about.

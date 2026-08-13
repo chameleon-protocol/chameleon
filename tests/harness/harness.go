@@ -47,6 +47,17 @@ type Options struct {
 	// is.
 	Reconnect bool
 
+	// Candidates, when greater than one, puts a MultiPath in front of the server
+	// socket: the server becomes reachable at that many distinct 127.0.0.1
+	// addresses, each impairable on its own through Ctrl.SetFor. The client
+	// dials the first of them.
+	//
+	// It is what lets a multi-candidate scenario be written down before a
+	// Selector exists to choose between candidates. Until one does, the client
+	// still has exactly one ServerAddr, so the other legs are reachable but
+	// unused -- which is itself the thing several tests are about.
+	Candidates int
+
 	// Bandwidth declares a rate on both ends, which is the only way to get the
 	// Brutal congestion controller installed: the core falls back to the
 	// configured controller (BBR) whenever either side's declaration is zero.
@@ -82,7 +93,14 @@ type Env struct {
 	// UDPEcho is the address of a UDP echo server.
 	UDPEcho string
 
+	// ServerAddr is the address the client dialled, which is a MultiPath leg
+	// when Options.Candidates asked for one and the server socket otherwise.
+	// AddClient reaches the server the same way the first client did.
 	ServerAddr net.Addr
+
+	// Paths is the forwarder in front of the server, or nil when
+	// Options.Candidates did not ask for one.
+	Paths *MultiPath
 }
 
 // New brings up the whole path and registers its teardown with t. It fails the
@@ -131,6 +149,11 @@ func TryNew(t testing.TB, opts Options) (*Env, error) {
 	udpEcho := startUDPEcho(t)
 
 	serverAddr := serverConn.LocalAddr()
+	var paths *MultiPath
+	if opts.Candidates > 0 {
+		paths = NewMultiPath(t, serverAddr, opts.Candidates)
+		serverAddr = paths.Legs[0].Addr()
+	}
 	c, err := dialClient(t, ctrl, serverAddr, opts)
 	if err != nil {
 		return nil, err
@@ -143,6 +166,7 @@ func TryNew(t testing.TB, opts Options) (*Env, error) {
 		TCPEcho:    tcpEcho,
 		UDPEcho:    udpEcho,
 		ServerAddr: serverAddr,
+		Paths:      paths,
 	}, nil
 }
 

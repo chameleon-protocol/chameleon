@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"math/rand/v2"
 	"net"
+	"net/netip"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -40,6 +41,17 @@ type Conn struct {
 	overflow atomic.Uint64
 	counters counters
 
+	// seed1, seed2 seed the default pipes' draws; a per-candidate pipe derives
+	// its own stream from them and the candidate's address (see peer.go).
+	seed1, seed2 uint64
+
+	// peers holds the candidates that have been given pipes of their own. It is
+	// empty unless the Controller has per-candidate rules. nPeers mirrors its
+	// size so the per-datagram fast path needs no lock.
+	peersMu sync.RWMutex
+	peers   map[netip.AddrPort]*peerLink
+	nPeers  atomic.Int64
+
 	rdDeadline *deadline
 
 	closeOnce sync.Once
@@ -62,6 +74,8 @@ func newConn(inner net.PacketConn, ctrl *Controller, seed1, seed2 uint64) *Conn 
 		inner:      inner,
 		ctrl:       ctrl,
 		recv:       make(chan recvPacket, defaultRecvQueue),
+		seed1:      seed1,
+		seed2:      seed2,
 		rdDeadline: newDeadline(),
 		closed:     make(chan struct{}),
 		readDone:   make(chan struct{}),
@@ -82,7 +96,12 @@ func (c *Conn) readLoop() {
 	for {
 		n, addr, err := c.inner.ReadFrom(buf)
 		if n > 0 {
-			c.down.submit(bytes.Clone(buf[:n]), addr)
+			// Downstream, the candidate is the source of the datagram.
+			down := c.down
+			if pl := c.peerFor(addr); pl != nil {
+				down = pl.down
+			}
+			down.submit(bytes.Clone(buf[:n]), addr)
 		}
 		if err != nil {
 			return
@@ -128,7 +147,12 @@ func (c *Conn) WriteTo(p []byte, addr net.Addr) (int, error) {
 		return 0, net.ErrClosed
 	default:
 	}
-	c.up.submit(p, addr)
+	// Upstream, the candidate is the destination of the datagram.
+	up := c.up
+	if pl := c.peerFor(addr); pl != nil {
+		up = pl.up
+	}
+	up.submit(p, addr)
 	return len(p), nil
 }
 
@@ -140,6 +164,7 @@ func (c *Conn) Close() error {
 		<-c.readDone
 		c.up.stop()
 		c.down.stop()
+		c.stopPeers()
 		if c.ctrl != nil {
 			c.ctrl.retire(c)
 		}
@@ -163,13 +188,18 @@ func (c *Conn) SetReadDeadline(t time.Time) error {
 // deadline to interrupt.
 func (c *Conn) SetWriteDeadline(time.Time) error { return nil }
 
-// Stats returns the counters accumulated by this Conn so far.
+// Stats returns the counters accumulated by this Conn so far, over every
+// candidate together.
 func (c *Conn) Stats() Stats {
-	return Stats{
+	total := Stats{
 		Up:       c.counters.up.snapshot(),
 		Down:     c.counters.down.snapshot(),
 		Overflow: c.overflow.Load(),
 	}
+	for _, s := range c.peerStats() {
+		total = total.add(s)
+	}
+	return total
 }
 
 var _ net.PacketConn = (*Conn)(nil)
