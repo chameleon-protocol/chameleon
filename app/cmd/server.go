@@ -1440,6 +1440,38 @@ func (c *serverConfig) fillDisableUDP(hyConfig *server.Config) error {
 	return nil
 }
 
+// obfsPassword returns the configured obfuscation password, whichever
+// obfuscator it belongs to, or "" when obfuscation is off.
+func (c *serverConfig) obfsPassword() string {
+	switch strings.ToLower(c.Obfs.Type) {
+	case "salamander":
+		return c.Obfs.Salamander.Password
+	case "salamander-v2":
+		return c.Obfs.SalamanderV2.Password
+	case "gecko":
+		return c.Obfs.Gecko.Password
+	default:
+		return ""
+	}
+}
+
+// fillPaddingSeed ties the protocol's padding lengths to the obfuscation
+// password. Both ends must derive the same seed, so a client and server that
+// agree on the obfuscation password agree on this too, with nothing further to
+// configure. See paddingSeed.
+func (c *serverConfig) fillPaddingSeed(hyConfig *server.Config) error {
+	password := c.obfsPassword()
+	if password == "" {
+		return nil
+	}
+	seed, err := paddingSeed(password, c.Obfs.SalamanderV2.Realm)
+	if err != nil {
+		return configError{Field: "obfs", Err: err}
+	}
+	hyConfig.PaddingSeed = seed
+	return nil
+}
+
 func (c *serverConfig) fillUDPIdleTimeout(hyConfig *server.Config) error {
 	hyConfig.UDPIdleTimeout = c.UDPIdleTimeout
 	return nil
@@ -1615,6 +1647,7 @@ func (c *serverConfig) Config() (*server.Config, error) {
 		c.fillBandwidthConfig,
 		c.fillIgnoreClientBandwidth,
 		c.fillDisableUDP,
+		c.fillPaddingSeed,
 		c.fillUDPIdleTimeout,
 		c.fillAuthenticator,
 		c.fillEventLogger,

@@ -401,6 +401,38 @@ func (c *clientConfig) fillAuth(hyConfig *client.Config) error {
 	return nil
 }
 
+// obfsPassword returns the configured obfuscation password, whichever
+// obfuscator it belongs to, or "" when obfuscation is off.
+func (c *clientConfig) obfsPassword() string {
+	switch strings.ToLower(c.Obfs.Type) {
+	case "salamander":
+		return c.Obfs.Salamander.Password
+	case "salamander-v2":
+		return c.Obfs.SalamanderV2.Password
+	case "gecko":
+		return c.Obfs.Gecko.Password
+	default:
+		return ""
+	}
+}
+
+// fillPaddingSeed ties the protocol's padding lengths to the obfuscation
+// password, so that two deployments do not share the length distribution that
+// otherwise identifies all of them alike. Without obfuscation there is no
+// deployment secret to derive from and the padding keeps its fixed ranges.
+func (c *clientConfig) fillPaddingSeed(hyConfig *client.Config) error {
+	password := c.obfsPassword()
+	if password == "" {
+		return nil
+	}
+	seed, err := paddingSeed(password, c.Obfs.SalamanderV2.Realm)
+	if err != nil {
+		return configError{Field: "obfs", Err: err}
+	}
+	hyConfig.PaddingSeed = seed
+	return nil
+}
+
 func (c *clientConfig) fillTLSConfig(hyConfig *client.Config) error {
 	if c.TLS.SNI != "" {
 		hyConfig.TLSConfig.ServerName = c.TLS.SNI
@@ -662,6 +694,7 @@ func (c *clientConfig) Config() (*client.Config, error) {
 		c.fillCongestionConfig,
 		c.fillBandwidthConfig,
 		c.fillFastOpen,
+		c.fillPaddingSeed,
 	}
 	for _, f := range fillers {
 		if err := f(hyConfig); err != nil {
@@ -695,6 +728,7 @@ func (c *clientConfig) realmConfig(addr *realm.Addr) (*client.Config, error) {
 		c.fillCongestionConfig,
 		c.fillBandwidthConfig,
 		c.fillFastOpen,
+		c.fillPaddingSeed,
 	}
 	for _, f := range fillers {
 		if err := f(hyConfig); err != nil {
