@@ -114,6 +114,8 @@ type serverConfigObfsSalamanderV2 struct {
 	Realm string `mapstructure:"realm"`
 }
 
+// Deprecated: only reachable via obfs.type "gecko", which is never the default.
+// See extras/obfs/gecko.go for why it should not be enabled.
 type serverConfigObfsGecko struct {
 	Password      string `mapstructure:"password"`
 	MinPacketSize int    `mapstructure:"minPacketSize"`
@@ -121,6 +123,8 @@ type serverConfigObfsGecko struct {
 }
 
 type serverConfigObfs struct {
+	// Type selects the obfuscator; empty or "plain" means none. "gecko" is
+	// deprecated and warns at startup.
 	Type         string                       `mapstructure:"type"`
 	Salamander   serverConfigObfsSalamander   `mapstructure:"salamander"`
 	SalamanderV2 serverConfigObfsSalamanderV2 `mapstructure:"salamanderV2"`
@@ -1598,6 +1602,8 @@ func (c *serverConfig) fillMasqHandler(hyConfig *server.Config) error {
 
 // Config validates the fields and returns a ready-to-use chameleon server config
 func (c *serverConfig) Config() (*server.Config, error) {
+	// The server never parrots Chrome, so only the deprecation notice applies.
+	warnDeprecatedObfs(logger, c.Obfs.Type, false)
 	hyConfig := &server.Config{}
 	fillers := []func(*server.Config) error{
 		c.fillConn,

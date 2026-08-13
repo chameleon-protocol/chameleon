@@ -14,6 +14,35 @@ import (
 // Gecko adds shape obfuscation on top of Salamander: QUIC long-header
 // (handshake) packets are fragmented into randomly-sized, randomly-padded
 // chunks; short-header packets pass through untouched.
+//
+// Deprecated: Gecko is kept for existing deployments only. It is off by
+// default and should not be enabled in new configurations, for three reasons:
+//
+// 1. It reshapes the wrong traffic. WriteTo only fragments when the QUIC
+// header form bit is set, i.e. Initial/Handshake packets — a handful of
+// datagrams per connection. Every short-header packet, which is to say the
+// entire data plane and all of the volume, length and timing structure a
+// traffic classifier actually feeds on, is forwarded untouched.
+//
+// 2. It amplifies link loss on exactly the packets that can least afford it.
+// A packet is split into n chunks, n uniform over [2, 8], each sent as its own
+// datagram with no fragment-level retransmission: lose one chunk and the
+// reassembly entry sits until its TTL expires and the whole packet is gone.
+// The packet survives only if all n chunks do, so at link loss p the effective
+// loss is 1-(1-p)^n. At p = 5% that is 9.8% for n = 2, 33.7% for n = 8, and
+// 22.2% averaged over the range — a 2x to 6.7x amplification, 4.4x on average.
+// QUIC still recovers, but only via a PTO retransmit that is re-fragmented and
+// re-exposed to the same amplified loss, so handshakes on a lossy link stall
+// for multiple PTO rounds instead of failing outright.
+//
+// 3. It is the opposite disguise bet from Chrome parroting, which is on by
+// default on the client. Parroting pays real costs (Chrome-shaped Initial,
+// zero-length source connection IDs) to make the client look like Chrome QUIC.
+// Salamander already scrambles the bytes but preserves the datagram boundaries
+// and, up to the 8-byte salt, the lengths — so packet shape is the one part of
+// the Chrome fingerprint that survives the wrapper and the only part parroting
+// can still buy. Gecko then shreds precisely that. Running both means paying
+// for a disguise that is destroyed on the way out of the socket.
 const (
 	geckoReassemblyTTL = 8 * time.Second
 	geckoMaxReassembly = 4096
@@ -25,12 +54,15 @@ const (
 	geckoDefaultMaxPacket = 1200
 )
 
+// Deprecated: see the note at the top of this file.
 type GeckoOptions struct {
 	Password      []byte
 	MinPacketSize int
 	MaxPacketSize int
 }
 
+// Deprecated: see the note at the top of this file. Callers that keep using
+// Gecko should warn their users at startup.
 func WrapPacketConnGecko(conn net.PacketConn, opts GeckoOptions) (net.PacketConn, error) {
 	if len(opts.Password) == 0 {
 		return nil, errors.New("gecko: password is required")

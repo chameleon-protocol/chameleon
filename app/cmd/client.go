@@ -147,6 +147,8 @@ type clientConfigObfsSalamanderV2 struct {
 	Realm string `mapstructure:"realm"`
 }
 
+// Deprecated: only reachable via obfs.type "gecko", which is never the default.
+// See extras/obfs/gecko.go for why it should not be enabled.
 type clientConfigObfsGecko struct {
 	Password      string `mapstructure:"password"`
 	MinPacketSize int    `mapstructure:"minPacketSize"`
@@ -154,6 +156,8 @@ type clientConfigObfsGecko struct {
 }
 
 type clientConfigObfs struct {
+	// Type selects the obfuscator; empty or "plain" means none. "gecko" is
+	// deprecated and warns at startup.
 	Type         string                       `mapstructure:"type"`
 	Salamander   clientConfigObfsSalamander   `mapstructure:"salamander"`
 	SalamanderV2 clientConfigObfsSalamanderV2 `mapstructure:"salamanderV2"`
@@ -641,9 +645,13 @@ func (c *clientConfig) Config() (*client.Config, error) {
 		if err != nil {
 			return nil, configError{Field: "server", Err: err}
 		}
+		// Realm addresses are not share URIs, so obfs comes from the file alone.
+		warnDeprecatedObfs(logger, c.Obfs.Type, !c.QUIC.DisableChromeParrot)
 		return c.realmConfig(realmAddr)
 	}
 	c.parseURI()
+	// A share URI can select the obfs type, so warn only once it is final.
+	warnDeprecatedObfs(logger, c.Obfs.Type, !c.QUIC.DisableChromeParrot)
 	hyConfig := &client.Config{}
 	fillers := []func(*client.Config) error{
 		c.fillServerAddr,
