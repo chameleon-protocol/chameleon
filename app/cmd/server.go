@@ -50,6 +50,7 @@ import (
 	"github.com/chameleon-protocol/chameleon/extras/v2/outbounds"
 	"github.com/chameleon-protocol/chameleon/extras/v2/realm"
 	"github.com/chameleon-protocol/chameleon/extras/v2/sniff"
+	"github.com/chameleon-protocol/chameleon/extras/v2/timesource"
 	"github.com/chameleon-protocol/chameleon/extras/v2/trafficlogger"
 	eUtils "github.com/chameleon-protocol/chameleon/extras/v2/utils"
 )
@@ -72,6 +73,7 @@ type serverConfig struct {
 	Listen                string                      `mapstructure:"listen"`
 	Realm                 serverConfigRealm           `mapstructure:"realm"`
 	Obfs                  serverConfigObfs            `mapstructure:"obfs"`
+	TimeSource            timeSourceConfig            `mapstructure:"timeSource"`
 	TLS                   *serverConfigTLS            `mapstructure:"tls"`
 	ACME                  *serverConfigACME           `mapstructure:"acme"`
 	ECH                   *serverConfigECH            `mapstructure:"ech"`
@@ -90,6 +92,11 @@ type serverConfig struct {
 	Outbounds             []serverConfigOutboundEntry `mapstructure:"outbounds"`
 	TrafficStats          serverConfigTrafficStats    `mapstructure:"trafficStats"`
 	Masquerade            serverConfigMasquerade      `mapstructure:"masquerade"`
+
+	// clock carries the boot-time clock correction, when one was needed, from
+	// startup down to wrapObfs. Unexported because it is not configuration:
+	// nothing decodes into it.
+	clock *timesource.Clock
 }
 
 type serverConfigRealm struct {
@@ -426,7 +433,8 @@ func (c *serverConfig) wrapObfs(conn net.PacketConn) (net.PacketConn, error) {
 		return wrapped, nil
 	case "salamander-v2":
 		wrapped, err := obfs.WrapPacketConnSalamanderV2(conn,
-			[]byte(c.Obfs.SalamanderV2.Password), c.Obfs.SalamanderV2.Realm, obfs.RoleServer)
+			[]byte(c.Obfs.SalamanderV2.Password), c.Obfs.SalamanderV2.Realm, obfs.RoleServer,
+			obfsClockOptions(c.clock)...)
 		if err != nil {
 			return nil, configError{Field: "obfs.salamanderV2", Err: err}
 		}
@@ -1682,6 +1690,9 @@ func runServer(v *viper.Viper) {
 	if err := v.Unmarshal(&config); err != nil {
 		logger.Fatal("failed to parse server config", zap.Error(err))
 	}
+	// Has to precede Config(), which is where wrapObfs builds the obfuscator.
+	config.bootstrapClock()
+
 	hyConfig, err := config.Config()
 	if err != nil {
 		logger.Fatal("failed to load server config", zap.Error(err))

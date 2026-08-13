@@ -34,6 +34,12 @@ obfs:
     minPacketSize: 100
     maxPacketSize: 1200
 
+timeSource:
+  servers:
+    - time1.example.com:123
+    - time2.example.com:5353
+  timeout: 4s
+
 tls:
   sni: another.example.com
   insecure: true
