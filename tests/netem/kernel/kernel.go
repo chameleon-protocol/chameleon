@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/apernet/hysteria/tests/v2/netem"
+	"github.com/chameleon-protocol/chameleon/tests/v2/netem"
 )
 
 // EnableEnv is the environment variable that opts a run into touching the

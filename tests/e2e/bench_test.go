@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/apernet/hysteria/tests/v2/harness"
-	"github.com/apernet/hysteria/tests/v2/netem"
+	"github.com/chameleon-protocol/chameleon/tests/v2/harness"
+	"github.com/chameleon-protocol/chameleon/tests/v2/netem"
 )
 
 // These benchmarks are the regression baseline. Unlike a microbenchmark of one

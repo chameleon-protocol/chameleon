@@ -7,12 +7,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	coreErrs "github.com/apernet/hysteria/core/v2/errors"
+	coreErrs "github.com/chameleon-protocol/chameleon/core/v2/errors"
 
-	"github.com/apernet/hysteria/tests/v2/harness"
-	"github.com/apernet/hysteria/tests/v2/metrics"
-	"github.com/apernet/hysteria/tests/v2/netem"
-	"github.com/apernet/hysteria/tests/v2/netem/kernel"
+	"github.com/chameleon-protocol/chameleon/tests/v2/harness"
+	"github.com/chameleon-protocol/chameleon/tests/v2/metrics"
+	"github.com/chameleon-protocol/chameleon/tests/v2/netem"
+	"github.com/chameleon-protocol/chameleon/tests/v2/netem/kernel"
 )
 
 // These tests run a real core server and a real core client against each other

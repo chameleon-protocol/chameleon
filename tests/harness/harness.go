@@ -18,10 +18,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/apernet/hysteria/core/v2/client"
-	"github.com/apernet/hysteria/core/v2/server"
+	"github.com/chameleon-protocol/chameleon/core/v2/client"
+	"github.com/chameleon-protocol/chameleon/core/v2/server"
 
-	"github.com/apernet/hysteria/tests/v2/netem"
+	"github.com/chameleon-protocol/chameleon/tests/v2/netem"
 )
 
 // Options configures an Env. The zero value gives a clean link, a one-shot

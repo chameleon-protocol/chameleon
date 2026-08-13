@@ -1,9 +1,9 @@
-module github.com/apernet/hysteria/tests/v2
+module github.com/chameleon-protocol/chameleon/tests/v2
 
 go 1.25.0
 
 require (
-	github.com/apernet/hysteria/core/v2 v2.0.0
+	github.com/chameleon-protocol/chameleon/core/v2 v2.0.0
 	github.com/stretchr/testify v1.11.1
 )
 
@@ -25,4 +25,4 @@ require (
 )
 
 // The test bed is never released; it always builds against the tree it lives in.
-replace github.com/apernet/hysteria/core/v2 => ../core
+replace github.com/chameleon-protocol/chameleon/core/v2 => ../core

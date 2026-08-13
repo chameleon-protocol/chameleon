@@ -8,9 +8,9 @@ import (
 	"io"
 	"time"
 
-	coreErrs "github.com/apernet/hysteria/core/v2/errors"
+	coreErrs "github.com/chameleon-protocol/chameleon/core/v2/errors"
 
-	"github.com/apernet/hysteria/tests/v2/metrics"
+	"github.com/chameleon-protocol/chameleon/tests/v2/metrics"
 )
 
 const (
