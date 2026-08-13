@@ -124,7 +124,7 @@ func TestClientConfigWarnsOnGeckoFromURI(t *testing.T) {
 	logger = log
 	defer func() { logger = restore }()
 
-	config := &clientConfig{Server: "hysteria2://pw@geckotown.com:8443/?obfs=gecko&obfs-password=hidden"}
+	config := &clientConfig{Server: "chameleon://pw@geckotown.com:8443/?obfs=gecko&obfs-password=hidden"}
 	_, _ = config.Config()
 
 	assert.Equal(t, "gecko", config.Obfs.Type)
