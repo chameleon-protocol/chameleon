@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	coreErrs "github.com/chameleon-protocol/chameleon/core/v2/errors"
+	"github.com/chameleon-protocol/chameleon/core/v2/pathstats"
 )
 
 // reconnectableClientImpl is a wrapper of Client, which can reconnect when the connection is closed,
@@ -107,6 +108,20 @@ func (rc *reconnectableClientImpl) UDP() (HyUDPConn, error) {
 	} else {
 		return c.(HyUDPConn), nil
 	}
+}
+
+// PathStats reports on the connection that happens to be current. It does not
+// trigger a reconnect: asking how the path is doing must not be the thing that
+// dials it, or a monitoring loop would keep a dead server permanently busy.
+func (rc *reconnectableClientImpl) PathStats() (pathstats.Stats, bool) {
+	rc.m.Lock()
+	client := rc.client
+	rc.m.Unlock()
+
+	if p, ok := client.(PathStatsProvider); ok {
+		return p.PathStats()
+	}
+	return pathstats.Stats{}, false
 }
 
 func (rc *reconnectableClientImpl) Close() error {

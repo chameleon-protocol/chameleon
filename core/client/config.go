@@ -33,6 +33,13 @@ type Config struct {
 	// it from a deployment secret, e.g. the obfuscation password.
 	PaddingSeed []byte
 
+	// Stats is where the client records what it silently dropped. Optional:
+	// one is allocated here if the caller does not supply it, and the caller
+	// can read it back off the Config afterwards. Supply your own to keep the
+	// counters across the reconnects of a reconnectable client, which builds a
+	// fresh Config every time it connects.
+	Stats *Stats
+
 	filled bool // whether the fields have been verified and filled
 }
 
@@ -89,6 +96,9 @@ func (c *Config) verifyAndFill() error {
 		if err != nil {
 			return errors.ConfigError{Field: "CongestionConfig.BBRProfile", Reason: err.Error()}
 		}
+	}
+	if c.Stats == nil {
+		c.Stats = &Stats{}
 	}
 
 	c.filled = true

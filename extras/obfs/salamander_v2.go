@@ -102,6 +102,8 @@ type salamanderV2 struct {
 	bootTime time.Time
 
 	replay *replaySet
+
+	stats *Stats
 }
 
 // aeadSealOpener is the subset of cipher.AEAD used here, named so the intent is
@@ -150,6 +152,7 @@ func NewSalamanderV2(password []byte, realm string, role Role) (*salamanderV2, e
 		now:      now,
 		bootTime: now(),
 		replay:   newReplaySet(),
+		stats:    &Stats{},
 	}, nil
 }
 
@@ -190,16 +193,24 @@ func (o *salamanderV2) Obfuscate(in, out []byte) int {
 // no response, which is the entire point.
 //
 // It may modify in, which holds the scratch buffer the caller read into.
+//
+// The four rejection causes are counted separately even though they are
+// indistinguishable on the wire. An operator staring at a link that carries no
+// traffic needs to know which one it is: a wrong password, a wrong clock and a
+// prober replaying packets all look identical from here otherwise.
 func (o *salamanderV2) Deobfuscate(in, out []byte) int {
 	if len(in) < smV2MinLen {
+		o.stats.Malformed.Add(1)
 		return 0
 	}
 	salt := in[:smV2SaltLen]
 	plaintext, err := o.recvAEAD.Open(in[smV2SaltLen:smV2SaltLen], salt, in[smV2SaltLen:], nil)
 	if err != nil {
+		o.stats.AEADFailed.Add(1)
 		return 0
 	}
 	if len(plaintext) < smV2TSLen+1 {
+		o.stats.Malformed.Add(1)
 		return 0
 	}
 	payload := plaintext[:len(plaintext)-smV2TSLen]
@@ -207,14 +218,20 @@ func (o *salamanderV2) Deobfuscate(in, out []byte) int {
 
 	now := o.now()
 	if !o.timestampInWindow(ts, now) {
+		// This packet authenticated, so the peer is genuine and the password is
+		// right; only the clocks disagree. Record by how much, since that is
+		// what turns the counter into an instruction.
+		o.stats.recordSkew(ts, now.Unix())
 		return 0
 	}
 	var key [smV2SaltLen]byte
 	copy(key[:], salt)
 	if o.replay.seenOrAdd(key, now) {
+		o.stats.Replayed.Add(1)
 		return 0
 	}
 	if len(out) < len(payload) {
+		o.stats.Malformed.Add(1)
 		return 0
 	}
 	return copy(out, payload)
@@ -234,6 +251,12 @@ func (o *salamanderV2) timestampInWindow(ts int64, now time.Time) bool {
 		}
 	}
 	return ts >= lower
+}
+
+// Stats returns the rejection counters, broken down by cause. Every path out
+// of Deobfuscate that returns 0 bumps exactly one of them.
+func (o *salamanderV2) Stats() *Stats {
+	return o.stats
 }
 
 // replaySet remembers which salts have been seen, exactly. A probabilistic

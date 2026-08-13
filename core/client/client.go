@@ -13,6 +13,7 @@ import (
 	"github.com/chameleon-protocol/chameleon/core/v2/internal/congestion"
 	"github.com/chameleon-protocol/chameleon/core/v2/internal/protocol"
 	"github.com/chameleon-protocol/chameleon/core/v2/internal/utils"
+	"github.com/chameleon-protocol/chameleon/core/v2/pathstats"
 
 	"github.com/apernet/quic-go"
 	"github.com/apernet/quic-go/http3"
@@ -176,7 +177,7 @@ func (c *clientImpl) connect() (*HandshakeInfo, error) {
 	c.tr = tr
 	c.conn = conn
 	if authResp.UDPEnabled {
-		c.udpSM = newUDPSessionManager(&udpIOImpl{Conn: conn})
+		c.udpSM = newUDPSessionManager(&udpIOImpl{Conn: conn, Stats: c.config.Stats}, c.config.Stats)
 	}
 	return &HandshakeInfo{
 		UDPEnabled:  authResp.UDPEnabled,
@@ -240,6 +241,10 @@ func (c *clientImpl) UDP() (HyUDPConn, error) {
 		return nil, coreErrs.DialError{Message: "UDP not enabled"}
 	}
 	return c.udpSM.NewUDP()
+}
+
+func (c *clientImpl) PathStats() (pathstats.Stats, bool) {
+	return pathstats.FromQUIC(c.conn), true
 }
 
 func (c *clientImpl) Close() error {
@@ -317,7 +322,8 @@ func (c *tcpConn) SetWriteDeadline(t time.Time) error {
 }
 
 type udpIOImpl struct {
-	Conn *quic.Conn
+	Conn  *quic.Conn
+	Stats *Stats
 }
 
 func (io *udpIOImpl) ReceiveMessage() (*protocol.UDPMessage, error) {
@@ -330,6 +336,7 @@ func (io *udpIOImpl) ReceiveMessage() (*protocol.UDPMessage, error) {
 		udpMsg, err := protocol.ParseUDPMessage(msg)
 		if err != nil {
 			// Invalid message, this is fine - just wait for the next
+			io.Stats.UDPRxMalformed.Add(1)
 			continue
 		}
 		return udpMsg, nil

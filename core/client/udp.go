@@ -83,7 +83,8 @@ func (u *udpConn) Close() error {
 }
 
 type udpSessionManager struct {
-	io udpIO
+	io    udpIO
+	stats *Stats
 
 	mutex  sync.RWMutex
 	m      map[uint32]*udpConn
@@ -92,9 +93,13 @@ type udpSessionManager struct {
 	closed bool
 }
 
-func newUDPSessionManager(io udpIO) *udpSessionManager {
+func newUDPSessionManager(io udpIO, stats *Stats) *udpSessionManager {
+	if stats == nil {
+		stats = &Stats{}
+	}
 	m := &udpSessionManager{
 		io:     io,
+		stats:  stats,
 		m:      make(map[uint32]*udpConn),
 		nextID: 1,
 	}
@@ -130,6 +135,7 @@ func (m *udpSessionManager) feed(msg *protocol.UDPMessage) {
 	conn, ok := m.m[msg.SessionID]
 	if !ok {
 		// Ignore message from unknown session
+		m.stats.UDPRxNoSession.Add(1)
 		return
 	}
 
@@ -137,7 +143,9 @@ func (m *udpSessionManager) feed(msg *protocol.UDPMessage) {
 	case conn.ReceiveCh <- msg:
 		// OK
 	default:
-		// Channel full, drop the message
+		// Channel full, drop the message. Nothing else in the system will ever
+		// mention this, so the counter is the only trace it leaves.
+		m.stats.UDPRxQueueFull.Add(1)
 	}
 }
 

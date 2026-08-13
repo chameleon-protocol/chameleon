@@ -33,8 +33,9 @@ var bufPool = sync.Pool{
 }
 
 type obfsPacketConn struct {
-	Conn net.PacketConn
-	Obfs obfuscator
+	Conn  net.PacketConn
+	Obfs  obfuscator
+	stats *Stats
 }
 
 // udpLikePacketConn is the subset of *net.UDPConn methods that quic-go relies
@@ -63,8 +64,12 @@ type obfsPacketConnUDP struct {
 // obfuscation/deobfuscation.
 func wrapPacketConn(conn net.PacketConn, ob obfuscator) net.PacketConn {
 	opc := &obfsPacketConn{
-		Conn: conn,
-		Obfs: ob,
+		Conn:  conn,
+		Obfs:  ob,
+		stats: &Stats{},
+	}
+	if h, ok := ob.(statsHolder); ok {
+		opc.stats = h.Stats()
 	}
 	if udpConn, ok := conn.(udpLikePacketConn); ok {
 		return &obfsPacketConnUDP{
@@ -89,7 +94,9 @@ func (c *obfsPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 		if n > 0 || err != nil {
 			return n, addr, err
 		}
-		// Invalid packet, try again
+		// Invalid packet, try again. Nothing above us will ever hear about it,
+		// so count it - see Stats.
+		c.stats.Dropped.Add(1)
 	}
 }
 
@@ -103,6 +110,12 @@ func (c *obfsPacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 		n = len(p)
 	}
 	return n, err
+}
+
+// Stats returns the counters for packets this connection refused. The returned
+// pointer is live: read it whenever, the counters keep moving.
+func (c *obfsPacketConn) Stats() *Stats {
+	return c.stats
 }
 
 func (c *obfsPacketConn) Close() error {

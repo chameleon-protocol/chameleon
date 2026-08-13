@@ -17,6 +17,7 @@ import (
 	"github.com/chameleon-protocol/chameleon/core/v2/internal/congestion"
 	"github.com/chameleon-protocol/chameleon/core/v2/internal/protocol"
 	"github.com/chameleon-protocol/chameleon/core/v2/internal/utils"
+	"github.com/chameleon-protocol/chameleon/core/v2/pathstats"
 )
 
 const (
@@ -131,6 +132,12 @@ func (s *serverImpl) handleClient(conn *quic.Conn) {
 			tl.LogOnlineState(handler.authID, false)
 		}
 		if el := s.config.EventLogger; el != nil {
+			// Read the stats before Disconnect: the logger's account of why the
+			// connection ended is only useful next to the shape of the path it
+			// ended on.
+			if sl, ok := el.(ConnStatsLogger); ok {
+				sl.ConnStats(conn.RemoteAddr(), handler.authID, pathstats.FromQUIC(conn))
+			}
 			el.Disconnect(conn.RemoteAddr(), handler.authID, err)
 		}
 	}
@@ -218,8 +225,9 @@ func (h *h3sHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if !h.config.DisableUDP {
 				go func() {
 					sm := newUDPSessionManager(
-						&udpIOImpl{h.conn, id, h.config.TrafficLogger, h.config.RequestHook, h.config.Outbound},
+						&udpIOImpl{h.conn, id, h.config.TrafficLogger, h.config.RequestHook, h.config.Outbound, h.config.Stats},
 						&udpEventLoggerImpl{h.conn, id, h.config.EventLogger},
+						h.config.Stats,
 						h.config.UDPIdleTimeout,
 					)
 					h.udpSM = sm
@@ -228,6 +236,7 @@ func (h *h3sHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			// Auth failed, pretend to be a normal HTTP server
+			h.config.Stats.MasqAuthFailed.Add(1)
 			h.masqHandler(w, r)
 		}
 	} else {
@@ -347,6 +356,9 @@ func (h *h3sHandler) handleTCPRequest(stream *utils.QStream) {
 }
 
 func (h *h3sHandler) masqHandler(w http.ResponseWriter, r *http.Request) {
+	// Both fallbacks - failed auth and a request that was never ours - come
+	// through here, so this is the one place the count belongs.
+	h.config.Stats.MasqFallback.Add(1)
 	if h.config.MasqHandler != nil {
 		h.config.MasqHandler.ServeHTTP(w, r)
 	} else {
@@ -362,6 +374,7 @@ type udpIOImpl struct {
 	TrafficLogger TrafficLogger
 	RequestHook   RequestHook
 	Outbound      Outbound
+	Stats         *Stats
 }
 
 func (io *udpIOImpl) ReceiveMessage() (*protocol.UDPMessage, error) {
@@ -374,6 +387,7 @@ func (io *udpIOImpl) ReceiveMessage() (*protocol.UDPMessage, error) {
 		udpMsg, err := protocol.ParseUDPMessage(msg)
 		if err != nil {
 			// Invalid message, this is fine - just wait for the next
+			io.Stats.UDPRxMalformed.Add(1)
 			continue
 		}
 		if io.TrafficLogger != nil {

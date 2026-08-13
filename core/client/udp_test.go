@@ -27,7 +27,7 @@ func TestUDPSessionManager(t *testing.T) {
 		}
 		return m, nil
 	})
-	sm := newUDPSessionManager(io)
+	sm := newUDPSessionManager(io, nil)
 
 	// Test UDP session IO
 	udpConn1, err := sm.NewUDP()

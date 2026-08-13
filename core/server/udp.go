@@ -242,16 +242,21 @@ func sendMessageAutoFrag(io udpIO, buf []byte, msg *protocol.UDPMessage) error {
 type udpSessionManager struct {
 	io          udpIO
 	eventLogger udpEventLogger
+	stats       *Stats
 	idleTimeout time.Duration
 
 	mutex sync.RWMutex
 	m     map[uint32]*udpSessionEntry
 }
 
-func newUDPSessionManager(io udpIO, eventLogger udpEventLogger, idleTimeout time.Duration) *udpSessionManager {
+func newUDPSessionManager(io udpIO, eventLogger udpEventLogger, stats *Stats, idleTimeout time.Duration) *udpSessionManager {
+	if stats == nil {
+		stats = &Stats{}
+	}
 	return &udpSessionManager{
 		io:          io,
 		eventLogger: eventLogger,
+		stats:       stats,
 		idleTimeout: idleTimeout,
 		m:           make(map[uint32]*udpSessionEntry),
 	}
@@ -346,8 +351,12 @@ func (m *udpSessionManager) feed(msg *protocol.UDPMessage) {
 
 	// Feed the message to the session
 	// Feed (send) errors are ignored for now,
-	// as some are temporary (e.g. invalid address)
-	_, _ = entry.Feed(msg)
+	// as some are temporary (e.g. invalid address).
+	// They are still counted: a session that fails every single write looks
+	// exactly like an idle one otherwise.
+	if _, err := entry.Feed(msg); err != nil {
+		m.stats.UDPSessionFeedFailed.Add(1)
+	}
 }
 
 func (m *udpSessionManager) Count() int {

@@ -13,6 +13,7 @@ import (
 	"github.com/chameleon-protocol/chameleon/core/v2/internal/congestion"
 	"github.com/chameleon-protocol/chameleon/core/v2/internal/pmtud"
 	"github.com/chameleon-protocol/chameleon/core/v2/internal/utils"
+	"github.com/chameleon-protocol/chameleon/core/v2/pathstats"
 	"github.com/apernet/quic-go"
 )
 
@@ -46,6 +47,11 @@ type Config struct {
 	// (and therefore shared by) every deployment. Callers are expected to derive
 	// it from a deployment secret, e.g. the obfuscation password.
 	PaddingSeed []byte
+
+	// Stats is where the server records what it silently dropped or turned
+	// away. Optional: one is allocated here if the caller does not supply it,
+	// and can be read back off the Config afterwards.
+	Stats *Stats
 }
 
 // fill fills the fields that are not set by the user with default values when possible,
@@ -115,6 +121,9 @@ func (c *Config) fill() error {
 	}
 	if c.Authenticator == nil {
 		return errors.ConfigError{Field: "Authenticator", Reason: "must be set"}
+	}
+	if c.Stats == nil {
+		c.Stats = &Stats{}
 	}
 	return nil
 }
@@ -239,6 +248,18 @@ type EventLogger interface {
 	TCPError(addr net.Addr, id, reqAddr string, err error)
 	UDPRequest(addr net.Addr, id string, sessionID uint32, reqAddr string)
 	UDPError(addr net.Addr, id string, sessionID uint32, err error)
+}
+
+// ConnStatsLogger is an optional extension to EventLogger. An EventLogger that
+// also implements it is handed the transport statistics of a connection just
+// before Disconnect, which is the one moment those numbers explain anything:
+// "disconnected after 40s, 12% loss, 800ms RTT" is a diagnosis, "disconnected"
+// is a shrug.
+//
+// It is a separate interface rather than another method on EventLogger so that
+// existing implementations keep compiling.
+type ConnStatsLogger interface {
+	ConnStats(addr net.Addr, id string, stats pathstats.Stats)
 }
 
 type HyStream interface {
