@@ -1521,9 +1521,13 @@ func (c *clientConfig) startMimic() *mimic.Instance {
 			ExtraArgs: c.Mimic.ExtraArgs,
 		},
 		mimic.RoleClient, addr, logger,
-		func(err error) { logger.Fatal("mimic stopped", zap.Error(err)) },
 	)
 	if err != nil {
+		// Failing here means Mimic never attached, so nothing this process
+		// could do would reach the server: exiting says so plainly, and leaves
+		// the retrying to whoever started us. A Mimic that dies later is a
+		// different matter — the instance restarts it and the client
+		// reconnects over it.
 		logger.Fatal("failed to start mimic", zap.Error(err))
 	}
 	return inst

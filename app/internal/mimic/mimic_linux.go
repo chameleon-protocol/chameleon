@@ -13,7 +13,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -26,22 +25,13 @@ const (
 	readyPollEvery = 100 * time.Millisecond
 )
 
-type Instance struct {
-	cmd    *exec.Cmd
-	cancel context.CancelFunc
-	logger *zap.Logger
-
-	mu      sync.Mutex
-	stopped bool
-	exited  chan struct{}
-}
-
 // Start launches Mimic for addr and waits for it to attach. addr is the peer's
 // address for RoleClient and our listen address for RoleServer.
 //
-// onExit is called if Mimic stops on its own, which is fatal: the peer expects
-// TCP-shaped packets, so the connection is already dead by then.
-func Start(cfg Config, role Role, addr *net.UDPAddr, logger *zap.Logger, onExit func(error)) (*Instance, error) {
+// The returned Instance keeps Mimic running: if it later exits on its own it is
+// started again, since without it the peer sees packets in the wrong shape and
+// the flow is dead until Mimic is back.
+func Start(cfg Config, role Role, addr *net.UDPAddr, logger *zap.Logger) (*Instance, error) {
 	if !cfg.Enabled {
 		return nil, nil
 	}
@@ -72,6 +62,12 @@ func Start(cfg Config, role Role, addr *net.UDPAddr, logger *zap.Logger, onExit 
 		return nil, nil
 	}
 
+	launch := func() (*process, error) { return launchProcess(cfg, bin, iface, filter, logger) }
+	return startWithBackoff(launch, logger, restartDelayMin, restartDelayMax)
+}
+
+// launchProcess starts one Mimic and returns once it has attached.
+func launchProcess(cfg Config, bin, iface, filter string, logger *zap.Logger) (*process, error) {
 	args := []string{"run", iface, "-f", filter}
 	if cfg.XDPMode != "" {
 		args = append(args, "--xdp-mode", cfg.XDPMode)
@@ -99,52 +95,41 @@ func Start(cfg Config, role Role, addr *net.UDPAddr, logger *zap.Logger, onExit 
 		return nil, fmt.Errorf("failed to start mimic: %w", err)
 	}
 
-	i := &Instance{cmd: cmd, cancel: cancel, logger: logger, exited: make(chan struct{})}
-	go i.pipeLogs(stderr)
-	go i.wait(onExit)
+	go pipeLogs(logger, stderr)
 
-	if err := waitReady(iface, cmd.Process.Pid, i.exited); err != nil {
-		_ = i.Close()
+	var waitErr error
+	exited := make(chan struct{})
+	go func() {
+		defer close(exited)
+		waitErr = cmd.Wait()
+	}()
+
+	p := &process{
+		wait: func() error { <-exited; return waitErr },
+		stop: func() error {
+			cancel()
+			<-exited
+			return nil
+		},
+	}
+	if err := waitReady(iface, cmd.Process.Pid, exited); err != nil {
+		_ = p.stop()
 		return nil, err
 	}
 	logger.Info("mimic started",
 		zap.String("interface", iface),
 		zap.String("filter", filter))
-	return i, nil
-}
-
-// Close stops Mimic and waits for it to detach.
-func (i *Instance) Close() error {
-	if i == nil {
-		return nil
-	}
-	i.mu.Lock()
-	i.stopped = true
-	i.mu.Unlock()
-	i.cancel()
-	<-i.exited
-	return nil
-}
-
-func (i *Instance) wait(onExit func(error)) {
-	err := i.cmd.Wait()
-	close(i.exited)
-	i.mu.Lock()
-	expected := i.stopped
-	i.mu.Unlock()
-	if !expected && onExit != nil {
-		onExit(fmt.Errorf("mimic exited unexpectedly: %w", err))
-	}
+	return p, nil
 }
 
 // pipeLogs forwards Mimic's output into our logger. Mimic writes its own level
 // prefixes and colours; we keep the line as-is rather than trying to parse it.
-func (i *Instance) pipeLogs(r io.Reader) {
+func pipeLogs(logger *zap.Logger, r io.Reader) {
 	s := bufio.NewScanner(r)
 	for s.Scan() {
 		line := strings.TrimSpace(stripANSI(s.Text()))
 		if line != "" {
-			i.logger.Info("mimic", zap.String("output", line))
+			logger.Info("mimic", zap.String("output", line))
 		}
 	}
 }

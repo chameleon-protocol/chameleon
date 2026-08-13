@@ -1651,7 +1651,6 @@ func runServer(v *viper.Viper) {
 			ExtraArgs: config.Mimic.ExtraArgs,
 		},
 		mimic.RoleServer, listenUDPAddr(config.Listen), logger,
-		func(err error) { logger.Fatal("mimic stopped", zap.Error(err)) },
 	)
 	if err != nil {
 		logger.Fatal("failed to start mimic", zap.Error(err))
