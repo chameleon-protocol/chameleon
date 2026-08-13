@@ -113,11 +113,32 @@ type aeadSealOpener interface {
 	Open(dst, nonce, ciphertext, additionalData []byte) ([]byte, error)
 }
 
+// SalamanderV2Option adjusts an obfuscator at construction time.
+type SalamanderV2Option func(*salamanderV2)
+
+// WithClock replaces the source of wall-clock time used for the timestamp
+// window and the boot barrier.
+//
+// It exists for hosts with no RTC, whose system clock reads 1970 until
+// something repairs it -- and whose only route to a repair is the tunnel this
+// obfuscator is protecting. See extras/timesource for the way out of that
+// deadlock, and for why the corrected time it produces is a liveness aid and
+// never a security boundary: the clock passed here decides only whether our own
+// packets land inside the peer's window, and an attacker who controls it can at
+// worst keep this host offline.
+func WithClock(now func() time.Time) SalamanderV2Option {
+	return func(o *salamanderV2) {
+		if now != nil {
+			o.now = now
+		}
+	}
+}
+
 // NewSalamanderV2 builds the obfuscator for one end of a connection.
 //
 // realm is optional and scopes key derivation to one deployment; both ends must
 // set it identically. See crypto.StretchPassword for why it exists.
-func NewSalamanderV2(password []byte, realm string, role Role) (*salamanderV2, error) {
+func NewSalamanderV2(password []byte, realm string, role Role, opts ...SalamanderV2Option) (*salamanderV2, error) {
 	if len(password) == 0 {
 		return nil, ErrPasswordRequired
 	}
@@ -145,20 +166,27 @@ func NewSalamanderV2(password []byte, realm string, role Role) (*salamanderV2, e
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now
-	return &salamanderV2{
+	o := &salamanderV2{
 		sendAEAD: sendAEAD,
 		recvAEAD: recvAEAD,
-		now:      now,
-		bootTime: now(),
+		now:      time.Now,
 		replay:   newReplaySet(),
 		stats:    &Stats{},
-	}, nil
+	}
+	for _, opt := range opts {
+		opt(o)
+	}
+	// bootTime has to be read from the final clock. Taking it before the
+	// options run would stamp it with the uncorrected system clock, and on the
+	// hosts WithClock exists for that reads 1970 -- making now.Sub(bootTime)
+	// decades wide and silently retiring the boot barrier.
+	o.bootTime = o.now()
+	return o, nil
 }
 
 // WrapPacketConnSalamanderV2 enables Salamander v2 on a PacketConn.
-func WrapPacketConnSalamanderV2(conn net.PacketConn, password []byte, realm string, role Role) (net.PacketConn, error) {
-	ob, err := NewSalamanderV2(password, realm, role)
+func WrapPacketConnSalamanderV2(conn net.PacketConn, password []byte, realm string, role Role, opts ...SalamanderV2Option) (net.PacketConn, error) {
+	ob, err := NewSalamanderV2(password, realm, role, opts...)
 	if err != nil {
 		return nil, err
 	}

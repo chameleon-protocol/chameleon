@@ -59,6 +59,10 @@ func TestClientConfig(t *testing.T) {
 				MaxPacketSize: 1200,
 			},
 		},
+		TimeSource: timeSourceConfig{
+			Servers: []string{"time1.example.com:123", "time2.example.com:5353"},
+			Timeout: 4 * time.Second,
+		},
 		TLS: clientConfigTLS{
 			SNI:               "another.example.com",
 			Insecure:          true,

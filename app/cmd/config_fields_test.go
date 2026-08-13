@@ -21,6 +21,11 @@ func unsetFields(v reflect.Value, path string) []string {
 		var unset []string
 		for i := range v.NumField() {
 			f := v.Type().Field(i)
+			// Unexported fields are not configuration -- mapstructure cannot
+			// write to them -- so a fixture has no way to cover them.
+			if f.PkgPath != "" {
+				continue
+			}
 			name := f.Tag.Get("mapstructure")
 			if name == "" {
 				name = f.Name

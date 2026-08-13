@@ -41,6 +41,7 @@ import (
 	"github.com/chameleon-protocol/chameleon/extras/v2/correctnet"
 	"github.com/chameleon-protocol/chameleon/extras/v2/obfs"
 	"github.com/chameleon-protocol/chameleon/extras/v2/realm"
+	"github.com/chameleon-protocol/chameleon/extras/v2/timesource"
 	"github.com/chameleon-protocol/chameleon/extras/v2/transport/udphop"
 )
 
@@ -77,6 +78,7 @@ type clientConfig struct {
 	Realm         clientConfigRealm      `mapstructure:"realm"`
 	Transport     clientConfigTransport  `mapstructure:"transport"`
 	Obfs          clientConfigObfs       `mapstructure:"obfs"`
+	TimeSource    timeSourceConfig       `mapstructure:"timeSource"`
 	TLS           clientConfigTLS        `mapstructure:"tls"`
 	QUIC          clientConfigQUIC       `mapstructure:"quic"`
 	Mimic         mimicConfig            `mapstructure:"mimic"`
@@ -92,6 +94,12 @@ type clientConfig struct {
 	UDPTProxy     *udpTProxyConfig       `mapstructure:"udpTProxy"`
 	TCPRedirect   *tcpRedirectConfig     `mapstructure:"tcpRedirect"`
 	TUN           *tunConfig             `mapstructure:"tun"`
+
+	// clock carries the boot-time clock correction, when one was needed, from
+	// startup down to wrapObfs. It is unexported because it is not
+	// configuration: nothing decodes into it, and Config() runs again on every
+	// reconnect, so the correction has to outlive a single call.
+	clock *timesource.Clock
 }
 
 type mimicConfig struct {
@@ -357,7 +365,8 @@ func (c *clientConfig) wrapObfs(conn net.PacketConn) (net.PacketConn, error) {
 		return wrapped, nil
 	case "salamander-v2":
 		wrapped, err := obfs.WrapPacketConnSalamanderV2(conn,
-			[]byte(c.Obfs.SalamanderV2.Password), c.Obfs.SalamanderV2.Realm, obfs.RoleClient)
+			[]byte(c.Obfs.SalamanderV2.Password), c.Obfs.SalamanderV2.Realm, obfs.RoleClient,
+			obfsClockOptions(c.clock)...)
 		if err != nil {
 			return nil, configError{Field: "obfs.salamanderV2", Err: err}
 		}
@@ -399,6 +408,21 @@ func (c clientConfigTransportUDP) hopIntervalConfig() (udphop.HopIntervalConfig,
 func (c *clientConfig) fillAuth(hyConfig *client.Config) error {
 	hyConfig.Auth = c.Auth
 	return nil
+}
+
+// resolvedObfsType returns the obfuscator that will actually engage, taking the
+// share URI into account. It reads the URI without consuming it: parseURI does
+// not run until the first connection attempt, and the clock has to be repaired
+// before that attempt, not after it has already failed.
+func (c *clientConfig) resolvedObfsType() string {
+	u, err := url.Parse(c.Server)
+	if err != nil || (u.Scheme != "chameleon" && u.Scheme != "chm") {
+		return c.Obfs.Type
+	}
+	if obfsType := u.Query().Get("obfs"); obfsType != "" {
+		return obfsType
+	}
+	return c.Obfs.Type
 }
 
 // obfsPassword returns the configured obfuscation password, whichever
@@ -910,6 +934,12 @@ func runClient(v *viper.Viper) {
 	if err := config.validateMimic(); err != nil {
 		logger.Fatal("failed to load client config", zap.Error(err))
 	}
+
+	// Before anything opens a socket: a host with no RTC has to know roughly
+	// what time it is, or every packet it sends lands outside the peer's replay
+	// window and nothing it does will ever connect.
+	config.bootstrapClock()
+
 	mimicInst := config.startMimic()
 	defer mimicInst.Close()
 

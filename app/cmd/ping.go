@@ -40,6 +40,8 @@ func runPing(v *viper.Viper, addr string) {
 	if err := v.Unmarshal(&config); err != nil {
 		logger.Fatal("failed to parse client config", zap.Error(err))
 	}
+	// Config() builds the obfuscator, so the clock has to be settled first.
+	config.bootstrapClock()
 	hyConfig, err := config.Config()
 	if err != nil {
 		logger.Fatal("failed to load client config", zap.Error(err))
