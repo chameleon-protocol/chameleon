@@ -262,9 +262,19 @@ func TestPacketNumberLengthIsBounded(t *testing.T) {
 	rates := []uint64{
 		100 << 10, 400 << 10, 1 << 20, 2 << 20, 10 << 20, 100 << 20, 1 << 30,
 	}
-	// The bands, in the order the length grows through them, so that "at most
-	// one band of movement" is a subtraction rather than a case analysis.
-	band := map[int]int{1: 0, 2: 1, 4: 2}
+	// Which of those rates moves is written down rather than computed, because
+	// every way of computing it goes back through the clamp and the test stops
+	// guarding the thing it exists to guard. Asserting "at most one band" was
+	// the first version and it was vacuous twice over: two bands means crossing
+	// both 64 and 16384, a 256-fold window range, which no K under 256 can
+	// reach.
+	//
+	// At minRTT = 20ms with the 32-packet floor and the 20000-packet ceiling
+	// the window is bps x 20ms x 2 / 1280 packets, so 1 MiB/s sits at 33 and
+	// the clamp takes it to 66, over Chrome's 64. Nothing else in the list
+	// starts on one side of a threshold and ends on the other. Widening K moves
+	// rates onto the list and this fails, which is the point.
+	movesAcrossAThreshold := map[uint64]bool{1 << 20: true}
 
 	t.Logf("%-16s %-12s %-12s %-10s %-10s", "declared B/s", "packets@min", "packets@clamp", "pn@min", "pn@clamp")
 	for _, bps := range rates {
@@ -276,10 +286,9 @@ func TestPacketNumberLengthIsBounded(t *testing.T) {
 		want := chromePNLen(packets(b))
 		t.Logf("%-16d %-12.0f %-12.0f %-10d %-10d", bps, restPackets, packets(b), atRest, want)
 
-		// One band at most between the two ends of the clamp's range.
-		if d := band[want] - band[atRest]; d < 0 || d > 1 {
-			t.Errorf("declared %d B/s: pn length %d at rest, %d at the clamp -- more than one band of movement",
-				bps, atRest, want)
+		if moved := want != atRest; moved != movesAcrossAThreshold[bps] {
+			t.Errorf("declared %d B/s: pn length went %d -> %d across the clamp, expected movement=%v",
+				bps, atRest, want, movesAcrossAThreshold[bps])
 		}
 
 		// Past the clamp, across every queue depth the path could develop, it
