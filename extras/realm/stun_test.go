@@ -79,7 +79,7 @@ func TestDiscoverSTUNWithDemux(t *testing.T) {
 	defer conn.Close()
 	wrapped, err := NewPunchPacketConn(conn, 4)
 	require.NoError(t, err)
-	go pumpPunchPacketConn(wrapped)
+	pumpPunchPacketConn(t, wrapped)
 
 	addrs, err := DiscoverWithDemux(context.Background(), wrapped, STUNConfig{
 		Servers: []string{server.Addr().String()},

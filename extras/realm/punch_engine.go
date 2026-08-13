@@ -15,15 +15,34 @@ const (
 	defaultPunchTimeout  = 10 * time.Second
 	defaultPunchInterval = 100 * time.Millisecond
 
-	symmetricNATPortGap         = 4
-	symmetricNATExtraPorts      = 4
-	symmetricNATMaxPortsPerHost = 32
+	// Symmetric (endpoint-dependent) NAT port probing. See the package
+	// documentation for the arithmetic behind these numbers.
+	defaultSymmetricNATProbes      = 1024
+	defaultSymmetricNATProbeRate   = 100 // packets per second
+	defaultSymmetricNATProbeBudget = 20 * time.Second
+	// A punch that probes needs a timeout that covers the probe budget,
+	// otherwise most of the probes are never sent.
+	defaultSymmetricNATPunchTimeout = defaultSymmetricNATProbeBudget
+	// When both ends allocate ports per destination, neither can predict the
+	// other. Keep trying just long enough for a path that needs no prediction
+	// (same LAN, hairpin) to answer, then let the caller fall back.
+	defaultSymmetricNATBothEndsTimeout = 2 * time.Second
+
+	symmetricNATSequentialSpan = 64
+	symmetricNATStrideProbes   = 16
+	// How many consecutive repeated draws end the random probe tier. Only a
+	// nearly exhausted port space produces that many in a row.
+	symmetricNATProbeMissLimit = 256
+	// Nothing below this is a plausible NAT mapping, and probing it looks like
+	// a port scan of well-known services.
+	symmetricNATMinProbePort = 1024
 
 	// The rendezvous server chooses the addresses a peer punches at, so the
-	// candidate set is attacker-controlled input. Cap it to bound the punch
-	// traffic a malicious realm can aim at a third party.
-	maxPunchPeerAddrs  = 16
-	maxPunchCandidates = 64
+	// candidate set is attacker-controlled input. Cap it, and cap the probes
+	// on top of it, to bound the punch traffic a malicious realm can aim at a
+	// third party. The rate limit bounds it over time; these bound it in total.
+	maxPunchPeerAddrs     = 16
+	maxSymmetricNATProbes = 4096
 )
 
 // PunchSourcePolicy decides which packet sources a punch attempt accepts.
@@ -38,7 +57,7 @@ const (
 	// for the initiator, PunchSourceAny for the responder.
 	PunchSourceDefault PunchSourcePolicy = iota
 	// PunchSourceCandidates accepts only addresses in the candidate set, which
-	// includes the ports predicted for symmetric NAT peers.
+	// includes the ports probed on a symmetric NAT peer.
 	PunchSourceCandidates
 	// PunchSourceCandidateHosts accepts any port on a candidate host, for peers
 	// behind a symmetric NAT whose ports cannot be predicted.
@@ -51,13 +70,39 @@ const (
 var (
 	ErrInvalidPunchConfig = errors.New("invalid punch config")
 	ErrPunchTimeout       = errors.New("punch timed out")
+	// ErrSymmetricNATBothEnds reports the one NAT combination hole punching
+	// cannot solve. Callers should read it as "stop punching, use a relay"
+	// rather than as a transient failure.
+	ErrSymmetricNATBothEnds = errors.New("both ends are behind endpoint-dependent NATs")
 )
+
+// SymmetricNATConfig tunes port probing against a peer whose NAT allocates a
+// fresh external port per destination.
+type SymmetricNATConfig struct {
+	// Disable turns probing off. The announced candidates are still punched.
+	Disable bool
+	// LocalNAT and PeerNAT override what the address lists imply. The zero
+	// value infers the class with ClassifyNAT.
+	LocalNAT NATClass
+	PeerNAT  NATClass
+	// Probes is how many ports to guess in total, across all peer hosts.
+	// Defaults to 1024.
+	Probes int
+	// ProbeRate caps the probes sent per second. Defaults to 100.
+	ProbeRate int
+	// ProbeBudget caps how long probing runs. Defaults to 20s.
+	ProbeBudget time.Duration
+	// BothEndsTimeout caps the whole attempt when both ends are
+	// endpoint-dependent. Defaults to 2s.
+	BothEndsTimeout time.Duration
+}
 
 type PunchConfig struct {
 	Timeout      time.Duration
 	Interval     time.Duration
 	Family       AddrFamily
 	SourcePolicy PunchSourcePolicy
+	SymmetricNAT SymmetricNATConfig
 }
 
 type PunchResult struct {
@@ -65,95 +110,309 @@ type PunchResult struct {
 	Packet   PunchPacket
 }
 
-// Punch performs pre-QUIC UDP hole punching. It owns conn reads until it
-// returns, so it must run before handing the socket to QUIC.
+// Punch performs UDP hole punching towards peerAddrs.
 //
-// The returned peer address is always one the caller asked for: sources
-// outside the candidate set are ignored rather than reported, so a rendezvous
-// server cannot answer with metadata of its own and hand the caller a QUIC
-// peer it never announced.
+// When conn is a *PunchPacketConn, punching shares the socket with whatever
+// else is on it: the demux hands punch packets to this attempt and everything
+// else to the reader above, so an attempt can start at any time, including
+// while QUIC is running. That is the supported way to punch, and Puncher is the
+// API for it — it names the attempt, so several can run at once.
+//
+// Any other PacketConn is read exclusively until Punch returns, which limits it
+// to bootstrapping a socket that has not been handed to QUIC yet. Once the
+// connection is up, only the demux path can punch again.
+//
+// The returned peer address is always one the caller asked for: sources outside
+// the candidate set are ignored rather than reported, so a rendezvous server
+// cannot answer with metadata of its own and hand the caller a QUIC peer it
+// never announced.
 func Punch(ctx context.Context, conn net.PacketConn, localAddrs, peerAddrs []netip.AddrPort, meta PunchMetadata, config PunchConfig) (PunchResult, error) {
 	if conn == nil {
 		return PunchResult{}, fmt.Errorf("%w: conn is nil", ErrInvalidPunchConfig)
 	}
-	if _, _, err := decodePunchMetadata(meta); err != nil {
-		return PunchResult{}, err
+	if demux, ok := conn.(*PunchPacketConn); ok {
+		puncher, err := NewPuncher(demux)
+		if err != nil {
+			return PunchResult{}, err
+		}
+		id, err := randomAttemptID()
+		if err != nil {
+			return PunchResult{}, err
+		}
+		return puncher.Punch(ctx, id, localAddrs, peerAddrs, meta, config)
 	}
-	policy, err := resolvePunchSourcePolicy(config.SourcePolicy, PunchSourceCandidates)
+	plan, err := newPunchPlan(localAddrs, peerAddrs, meta, config, PunchSourceCandidates, conn.LocalAddr())
 	if err != nil {
 		return PunchResult{}, err
 	}
-	candidates := candidatePunchAddrs(localAddrs, peerAddrs, effectiveFamily(config.Family, conn.LocalAddr()))
-	if len(candidates) == 0 {
-		return PunchResult{}, fmt.Errorf("%w: no compatible peer addresses", ErrInvalidPunchConfig)
+	transport := &directPunchTransport{conn: conn, key: plan.key}
+	defer conn.SetReadDeadline(time.Time{})
+	return runPunch(ctx, transport, plan)
+}
+
+// punchTransport is how the punch loop talks to a socket. The two
+// implementations differ only in where inbound punch packets come from: the
+// shared demux (permanent, coexists with QUIC) or an exclusive read loop.
+type punchTransport interface {
+	send(to netip.AddrPort, packetType PunchPacketType, key punchKey)
+	// recvUntil returns the next punch packet for this attempt, or ok=false
+	// when the deadline passes first.
+	recvUntil(ctx context.Context, deadline time.Time, key punchKey) (PunchPacketEvent, bool, error)
+}
+
+// punchPlan is a fully resolved punch attempt: who to send to, how fast, and
+// for how long.
+type punchPlan struct {
+	key     punchKey
+	sources punchSourceFilter
+
+	// targets are the announced candidates. They are re-sent every interval,
+	// both to punch and to keep the mapping they opened alive.
+	targets  []netip.AddrPort
+	interval time.Duration
+
+	// probes are guessed ports on an endpoint-dependent peer. Each is sent
+	// once, in bursts of probeBurst every probeGap, until probeBudget expires.
+	probes      []netip.AddrPort
+	probeBurst  int
+	probeGap    time.Duration
+	probeBudget time.Duration
+
+	timeout time.Duration
+	// bothEndsSymmetric records that the attempt is expected to fail, so the
+	// caller can tell "no answer yet" from "no answer is possible".
+	bothEndsSymmetric bool
+}
+
+func newPunchPlan(localAddrs, peerAddrs []netip.AddrPort, meta PunchMetadata, config PunchConfig, fallbackPolicy PunchSourcePolicy, local net.Addr) (punchPlan, error) {
+	key, err := newPunchKey(meta)
+	if err != nil {
+		return punchPlan{}, err
 	}
-	sources := newPunchSourceFilter(candidates, policy)
-	timeout := config.Timeout
-	if timeout == 0 {
-		timeout = defaultPunchTimeout
+	policy, err := resolvePunchSourcePolicy(config.SourcePolicy, fallbackPolicy)
+	if err != nil {
+		return punchPlan{}, err
 	}
-	if timeout < 0 {
-		return PunchResult{}, fmt.Errorf("%w: timeout must not be negative", ErrInvalidPunchConfig)
+	targets := candidatePunchAddrs(localAddrs, peerAddrs, effectiveFamily(config.Family, local))
+	if len(targets) == 0 {
+		return punchPlan{}, fmt.Errorf("%w: no compatible peer addresses", ErrInvalidPunchConfig)
 	}
 	interval := config.Interval
 	if interval == 0 {
 		interval = defaultPunchInterval
 	}
 	if interval <= 0 {
-		return PunchResult{}, fmt.Errorf("%w: interval must be positive", ErrInvalidPunchConfig)
+		return punchPlan{}, fmt.Errorf("%w: interval must be positive", ErrInvalidPunchConfig)
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	defer conn.SetReadDeadline(time.Time{})
+	sym := config.SymmetricNAT
+	localNAT := sym.LocalNAT
+	if localNAT == NATClassUnknown {
+		localNAT = ClassifyNAT(localAddrs)
+	}
+	peerNAT := sym.PeerNAT
+	if peerNAT == NATClassUnknown {
+		peerNAT = ClassifyNAT(peerAddrs)
+	}
+	plan := punchPlan{
+		key:               key,
+		targets:           targets,
+		interval:          interval,
+		bothEndsSymmetric: localNAT == NATClassEndpointDependent && peerNAT == NATClassEndpointDependent,
+	}
+	// Probing is worth its packets only when we can be found at a predictable
+	// port ourselves; if both ends allocate per destination, no amount of
+	// guessing helps (see the package documentation).
+	if !sym.Disable && peerNAT == NATClassEndpointDependent && !plan.bothEndsSymmetric {
+		probes := sym.Probes
+		if probes == 0 {
+			probes = defaultSymmetricNATProbes
+		}
+		if probes < 0 {
+			return punchPlan{}, fmt.Errorf("%w: probes must not be negative", ErrInvalidPunchConfig)
+		}
+		probes = min(probes, maxSymmetricNATProbes)
+		rate := sym.ProbeRate
+		if rate == 0 {
+			rate = defaultSymmetricNATProbeRate
+		}
+		if rate < 0 {
+			return punchPlan{}, fmt.Errorf("%w: probe rate must not be negative", ErrInvalidPunchConfig)
+		}
+		plan.probes = symmetricNATProbes(targets, probes, sym.PeerNAT == NATClassEndpointDependent)
+		plan.probeBurst, plan.probeGap = probePacing(rate)
+		if plan.probeBurst == 0 {
+			// No rate means no probing; sending them unpaced is not an option.
+			plan.probes = nil
+		}
+		plan.probeBudget = sym.ProbeBudget
+		if plan.probeBudget == 0 {
+			plan.probeBudget = defaultSymmetricNATProbeBudget
+		}
+		if plan.probeBudget < 0 {
+			return punchPlan{}, fmt.Errorf("%w: probe budget must not be negative", ErrInvalidPunchConfig)
+		}
+	}
 
-	nextSend := time.Now()
-	buf := make([]byte, punchMaxWireLen)
+	timeout := config.Timeout
+	if timeout == 0 {
+		timeout = defaultPunchTimeout
+		if len(plan.probes) > 0 {
+			timeout = defaultSymmetricNATPunchTimeout
+		}
+	}
+	if timeout < 0 {
+		return punchPlan{}, fmt.Errorf("%w: timeout must not be negative", ErrInvalidPunchConfig)
+	}
+	if plan.bothEndsSymmetric {
+		bothEnds := sym.BothEndsTimeout
+		if bothEnds == 0 {
+			bothEnds = defaultSymmetricNATBothEndsTimeout
+		}
+		if bothEnds < 0 {
+			return punchPlan{}, fmt.Errorf("%w: both-ends timeout must not be negative", ErrInvalidPunchConfig)
+		}
+		timeout = min(timeout, bothEnds)
+	}
+	plan.timeout = timeout
+
+	// Everything we send to is a source we expect an answer from, probes
+	// included: the peer's reply leaves through the very mapping we guessed.
+	plan.sources = newPunchSourceFilter(append(slices.Clip(plan.targets), plan.probes...), policy)
+	return plan, nil
+}
+
+// probePacing splits a per-second rate into a burst size and the gap between
+// bursts, so the loop wakes a few times per second instead of once per probe.
+func probePacing(rate int) (burst int, gap time.Duration) {
+	if rate <= 0 {
+		return 0, 0
+	}
+	burst = max(1, rate/10)
+	return burst, time.Second * time.Duration(burst) / time.Duration(rate)
+}
+
+func runPunch(ctx context.Context, transport punchTransport, plan punchPlan) (PunchResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, plan.timeout)
+	defer cancel()
+
+	now := time.Now()
+	nextTargets := now
+	nextProbe := now
+	probeDeadline := now.Add(plan.probeBudget)
+	// The attempt ends on our own clock rather than on ctx.Err(): the context
+	// reports its deadline a moment after it passes, and until it does, a loop
+	// waking on that same instant would spin.
+	punchDeadline := now.Add(plan.timeout)
+	probeIndex := 0
 	for {
 		if err := ctx.Err(); err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
-				return PunchResult{}, ErrPunchTimeout
-			}
-			return PunchResult{}, err
+			return PunchResult{}, plan.timeoutError(err)
 		}
-		now := time.Now()
-		if !now.Before(nextSend) {
-			sendPunchPackets(conn, candidates, meta, PunchPacketHello)
-			nextSend = now.Add(interval)
+		now = time.Now()
+		if !now.Before(punchDeadline) {
+			return PunchResult{}, plan.timeoutError(context.DeadlineExceeded)
+		}
+		if !now.Before(nextTargets) {
+			for _, target := range plan.targets {
+				transport.send(target, PunchPacketHello, plan.key)
+			}
+			nextTargets = now.Add(plan.interval)
+		}
+		probing := probeIndex < len(plan.probes) && now.Before(probeDeadline)
+		if probing && !now.Before(nextProbe) {
+			end := min(probeIndex+plan.probeBurst, len(plan.probes))
+			for _, probe := range plan.probes[probeIndex:end] {
+				transport.send(probe, PunchPacketHello, plan.key)
+			}
+			probeIndex = end
+			probing = probeIndex < len(plan.probes)
+			nextProbe = now.Add(plan.probeGap)
 		}
 
-		deadline := nextSend
+		// Wake for the next send that is actually due. Waking on a probe that
+		// the budget already ruled out would spin the loop.
+		deadline := punchDeadline
+		if nextTargets.Before(deadline) {
+			deadline = nextTargets
+		}
+		if probing && nextProbe.Before(deadline) {
+			deadline = nextProbe
+		}
 		if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
 			deadline = ctxDeadline
 		}
-		_ = conn.SetReadDeadline(deadline)
-		n, addr, err := conn.ReadFrom(buf)
+		if !deadline.After(now) {
+			// A deadline that has already passed belongs to a clock we do not
+			// own. Wait a little rather than busy-looping until it catches up.
+			deadline = now.Add(time.Millisecond)
+		}
+		ev, ok, err := transport.recvUntil(ctx, deadline, plan.key)
 		if err != nil {
-			if isTimeout(err) {
-				continue
-			}
 			return PunchResult{}, err
 		}
-		peerAddr, ok := addrToAddrPort(addr)
 		if !ok {
 			continue
 		}
-		// Drop before decoding so an untrusted source never gets an ack back,
-		// which would also confirm to it that the metadata was right.
-		if !sources.allows(peerAddr) {
+		// Drop unexpected sources without answering: an ack would confirm to
+		// whoever sent it that the metadata was right.
+		if !plan.sources.allows(ev.From) {
 			continue
 		}
-		packet, err := DecodePunchPacket(buf[:n], meta)
+		if ev.Packet.Type == PunchPacketHello {
+			transport.send(ev.From, PunchPacketAck, plan.key)
+		}
+		return PunchResult{
+			PeerAddr: ev.From,
+			Packet:   ev.Packet,
+		}, nil
+	}
+}
+
+func (p punchPlan) timeoutError(err error) error {
+	if !errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	if p.bothEndsSymmetric {
+		return fmt.Errorf("%w: %w", ErrPunchTimeout, ErrSymmetricNATBothEnds)
+	}
+	return ErrPunchTimeout
+}
+
+// directPunchTransport reads the socket itself. It cannot coexist with another
+// reader, so it is only for a socket that has not been handed to QUIC yet.
+type directPunchTransport struct {
+	conn net.PacketConn
+	key  punchKey
+	buf  []byte
+}
+
+func (t *directPunchTransport) send(to netip.AddrPort, packetType PunchPacketType, key punchKey) {
+	sendPunchPacket(t.conn, to, key, packetType)
+}
+
+func (t *directPunchTransport) recvUntil(ctx context.Context, deadline time.Time, key punchKey) (PunchPacketEvent, bool, error) {
+	if t.buf == nil {
+		t.buf = make([]byte, punchMaxWireLen)
+	}
+	_ = t.conn.SetReadDeadline(deadline)
+	for {
+		n, addr, err := t.conn.ReadFrom(t.buf)
+		if err != nil {
+			if isTimeout(err) {
+				return PunchPacketEvent{}, false, nil
+			}
+			return PunchPacketEvent{}, false, err
+		}
+		from, ok := addrToAddrPort(addr)
+		if !ok {
+			continue
+		}
+		packet, err := decodePunchPacket(t.buf[:n], key)
 		if err != nil {
 			continue
 		}
-		if packet.Type == PunchPacketHello {
-			sendPunchPacket(conn, peerAddr, meta, PunchPacketAck)
-		}
-		return PunchResult{
-			PeerAddr: peerAddr,
-			Packet:   packet,
-		}, nil
+		return PunchPacketEvent{From: from, Packet: packet}, true, nil
 	}
 }
 
@@ -206,14 +465,8 @@ func (f punchSourceFilter) allows(addr netip.AddrPort) bool {
 	}
 }
 
-func sendPunchPackets(conn net.PacketConn, addrs []netip.AddrPort, meta PunchMetadata, packetType PunchPacketType) {
-	for _, addr := range addrs {
-		sendPunchPacket(conn, addr, meta, packetType)
-	}
-}
-
-func sendPunchPacket(conn net.PacketConn, addr netip.AddrPort, meta PunchMetadata, packetType PunchPacketType) {
-	packet, err := EncodePunchPacket(packetType, meta)
+func sendPunchPacket(conn net.PacketConn, addr netip.AddrPort, key punchKey, packetType PunchPacketType) {
+	packet, err := encodePunchPacket(packetType, key)
 	if err != nil {
 		return
 	}
@@ -245,7 +498,6 @@ func candidatePunchAddrs(localAddrs, peerAddrs []netip.AddrPort, family AddrFami
 		seen[addr] = struct{}{}
 		candidates = append(candidates, addr)
 	}
-	candidates = expandSymmetricNATCandidates(candidates, seen)
 	sortAddrPorts(candidates)
 	return candidates
 }
@@ -274,66 +526,6 @@ func containsLoopback(addrs []netip.AddrPort) bool {
 		}
 	}
 	return false
-}
-
-func expandSymmetricNATCandidates(candidates []netip.AddrPort, seen map[netip.AddrPort]struct{}) []netip.AddrPort {
-	portsByIP := make(map[netip.Addr][]uint16)
-	for _, addr := range candidates {
-		if addr.Addr().Is4() {
-			portsByIP[addr.Addr()] = append(portsByIP[addr.Addr()], addr.Port())
-		}
-	}
-	for ip, ports := range portsByIP {
-		ports = uniqueSortedPorts(ports)
-		if !predictablePortGroup(ports) {
-			continue
-		}
-		start := int(ports[0])
-		end := int(ports[len(ports)-1]) + symmetricNATExtraPorts
-		if end > 65535 {
-			end = 65535
-		}
-		added := 0
-		for port := start; port <= end && added < symmetricNATMaxPortsPerHost; port++ {
-			if len(candidates) >= maxPunchCandidates {
-				return candidates
-			}
-			addr := netip.AddrPortFrom(ip, uint16(port))
-			if _, ok := seen[addr]; ok {
-				continue
-			}
-			seen[addr] = struct{}{}
-			candidates = append(candidates, addr)
-			added++
-		}
-	}
-	return candidates
-}
-
-func uniqueSortedPorts(ports []uint16) []uint16 {
-	slices.Sort(ports)
-	out := ports[:0]
-	var last uint16
-	for i, port := range ports {
-		if i > 0 && port == last {
-			continue
-		}
-		out = append(out, port)
-		last = port
-	}
-	return out
-}
-
-func predictablePortGroup(ports []uint16) bool {
-	if len(ports) < 2 {
-		return false
-	}
-	for i := 1; i < len(ports); i++ {
-		if ports[i]-ports[i-1] > symmetricNATPortGap {
-			return false
-		}
-	}
-	return true
 }
 
 func sortAddrPorts(addrs []netip.AddrPort) {

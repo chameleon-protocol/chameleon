@@ -15,6 +15,32 @@
 // Package realm implements Hysteria Realms: rendezvous-assisted UDP hole
 // punching between a client and a server that are both behind NAT.
 //
+// # Lifecycle
+//
+// Punching is not a phase that ends when the connection starts. PunchPacketConn
+// is meant to sit under QUIC for the whole life of the socket: it splits every
+// inbound packet into STUN responses, punch packets for registered attempts,
+// and everything else, which goes up to the reader. Puncher registers an
+// attempt, sends on the same socket, and takes its packets from that demux, so
+// an attempt can start at any moment — before the connection exists, and again
+// afterwards when the network changes underneath a live connection. Several
+// attempts can run at once; each has its own ID and its own event channel.
+//
+// Before QUIC owns the socket nobody is reading it, and a demux with no reader
+// sees nothing. PunchPacketConn.StartPump fills that gap and StopPump hands the
+// socket back, queueing what arrived in between so the handover loses nothing.
+//
+// The package-level Punch on a plain PacketConn still reads the socket
+// exclusively. That path exists for bootstrapping a socket QUIC has not been
+// given yet; it cannot be used again once the connection is up.
+//
+// Punch packets carry a clear-text four-byte attempt tag derived from the
+// metadata, which is what lets the demux find the attempt with a map lookup.
+// The alternative — trial-decrypting each packet against every in-flight
+// attempt — is a cost multiplier an attacker controls by spraying packets, and
+// permanent punching means paying it forever. The tag makes packets of one
+// attempt linkable to each other, which the address pair already did.
+//
 // # Trust model
 //
 // The rendezvous server is a meeting point, not an authority. It sees every
@@ -79,6 +105,44 @@
 // being permissive, since it authenticates the peer in the QUIC handshake that
 // follows. Callers that know their peers are well behaved can tighten this
 // with PunchConfig.SourcePolicy.
+//
+// # Endpoint-dependent (symmetric) NAT
+//
+// A NAT that allocates a fresh external port per destination hides the port a
+// peer would have to punch at. ClassifyNAT calls that out from the addresses a
+// peer announced: two ports on one host is conclusive, anything else is not.
+//
+// When the peer is endpoint-dependent and we are not, the punch guesses ports,
+// paced at 100 per second for at most 20 seconds (1024 guesses, about 10
+// seconds and 550 KB of hello packets). The guesses are ordered by yield:
+// neighbours of the announced ports first, since a NAT that allocates
+// sequentially is both common and cheap to hit; then the announced stride
+// extrapolated; then uniform random ports.
+//
+// What the random tier is worth, honestly. With N = 64512 guessable ports, n
+// guesses and m concurrent mappings on the peer's side, the chance of a hit is
+// 1 - (1 - n/N)^m ≈ 1 - e^(-nm/N). The peer's mappings are per destination
+// endpoint, so m is the number of our addresses it punches at — typically one
+// or two. n = 1024 against m = 1 is 1.6%, not the 98% the birthday paradox
+// promises. That number needs m in the hundreds, i.e. the peer sending from
+// hundreds of sockets at once so its NAT hands out hundreds of ports for us to
+// guess among (n = m = 512 gives 98%, n = m = 1024 gives ~100%). Nothing here
+// does that: the socket that wins would be the one the connection has to run
+// on, so it belongs with connection setup rather than with an attempt on an
+// existing socket. Until that exists, the sequential tiers carry this feature
+// and the random tier is a small bonus.
+//
+// When both ends are endpoint-dependent, neither can predict the other and the
+// probability collapses to nm/N² — a search that takes tens of minutes at any
+// sane packet rate. That case gives up after BothEndsTimeout (2s by default,
+// enough for a LAN or hairpin path that needs no prediction) and returns
+// ErrSymmetricNATBothEnds, which callers should treat as "use a relay", not as
+// a transient failure.
+//
+// Probing widens what a malicious rendezvous server can aim at a third party:
+// up to 1024 packets per attempt instead of a handful. The rate limit, the
+// probe budget, and maxSymmetricNATProbes bound it, and only hosts that
+// announced several ports are probed at all.
 //
 // # Known gap: metadata confidentiality
 //

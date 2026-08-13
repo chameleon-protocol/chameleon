@@ -28,7 +28,15 @@ first tag, this file switches to per-release sections.
     credentials. `masquerade.string.statusCode` no longer excludes `233`, since no
     status code is reserved any more.
   - URI scheme `hysteria2://` / `hy2://` → `chameleon://` / `chm://`.
-  - Hole-punch magic `HYRLMv1` → `CHRLMv1`.
+  - Hole-punch magic `HYRLMv1` → `CHRLMv1`, then → `CHRLMv2` with the attempt tag
+    below.
+- Hole-punch packets carry a four-byte attempt tag in the clear, after the salt.
+  Demultiplexing used to trial-decrypt every inbound packet against every
+  in-flight attempt, which is a per-packet cost an attacker sets by spraying
+  packets — affordable while punching was a brief step before the handshake, not
+  affordable now that it runs for the life of the socket. Punch packets of one
+  attempt are linkable to each other by the tag, which their address pair already
+  did.
 - Go module path → `github.com/chameleon-protocol/chameleon/{core,extras,app}/v2`.
 - Config search path `/etc/hysteria`, `$HOME/.hysteria` → `/etc/chameleon`,
   `$HOME/.chameleon`. Environment variables `HYSTERIA_*` → `CHAMELEON_*`. Build

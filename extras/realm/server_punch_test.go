@@ -20,7 +20,7 @@ func TestServerPuncherRespondsToHello(t *testing.T) {
 	defer server.Close()
 	client := listenUDP4(t)
 	defer client.Close()
-	pumpPunchPacketConn(wrapped)
+	pumpPunchPacketConn(t, wrapped)
 
 	serverAddr := packetConnAddrPort(t, server)
 	clientAddr := packetConnAddrPort(t, client)
@@ -56,7 +56,7 @@ func TestServerPuncherSendsHelloAndSeesAck(t *testing.T) {
 	defer server.Close()
 	client := listenUDP4(t)
 	defer client.Close()
-	pumpPunchPacketConn(wrapped)
+	pumpPunchPacketConn(t, wrapped)
 
 	serverAddr := packetConnAddrPort(t, server)
 	clientAddr := packetConnAddrPort(t, client)
@@ -91,7 +91,7 @@ func TestServerPuncherTimeout(t *testing.T) {
 	defer server.Close()
 	client := listenUDP4(t)
 	defer client.Close()
-	pumpPunchPacketConn(wrapped)
+	pumpPunchPacketConn(t, wrapped)
 
 	_, err := puncher.Respond(ctx, "attempt-1", []netip.AddrPort{packetConnAddrPort(t, server)}, []netip.AddrPort{packetConnAddrPort(t, client)}, meta, PunchConfig{
 		Timeout:  30 * time.Millisecond,
@@ -110,7 +110,7 @@ func TestServerPuncherConcurrentAttempts(t *testing.T) {
 	defer clientA.Close()
 	clientB := listenUDP4(t)
 	defer clientB.Close()
-	pumpPunchPacketConn(wrapped)
+	pumpPunchPacketConn(t, wrapped)
 
 	metaA := testPunchMetadata()
 	metaB := PunchMetadata{
@@ -161,9 +161,9 @@ func TestServerPuncherRejectsDuplicateAttempt(t *testing.T) {
 	clientB := listenUDP4(t)
 	defer clientB.Close()
 
-	_, err := puncher.addAttempt("attempt-1", meta)
+	_, err := puncher.conn.AddPunchAttempt("attempt-1", meta)
 	require.NoError(t, err)
-	defer puncher.removeAttempt("attempt-1")
+	defer puncher.conn.RemovePunchAttempt("attempt-1")
 
 	_, err = puncher.Respond(ctx, "attempt-1", []netip.AddrPort{packetConnAddrPort(t, server)}, []netip.AddrPort{packetConnAddrPort(t, clientB)}, meta, PunchConfig{
 		Timeout:  10 * time.Millisecond,
@@ -188,15 +188,12 @@ func newTestServerPuncher(t *testing.T, ctx context.Context) (net.PacketConn, *P
 	return server, wrapped, puncher
 }
 
-func pumpPunchPacketConn(conn *PunchPacketConn) {
-	go func() {
-		buf := make([]byte, 1500)
-		for {
-			if _, _, err := conn.ReadFrom(buf); err != nil {
-				return
-			}
-		}
-	}()
+// pumpPunchPacketConn feeds the demux while nothing else reads the socket,
+// which is what a caller does before handing it to QUIC.
+func pumpPunchPacketConn(t *testing.T, conn *PunchPacketConn) {
+	t.Helper()
+	conn.StartPump()
+	t.Cleanup(conn.StopPump)
 }
 
 func sendHello(t *testing.T, conn net.PacketConn, serverAddr net.Addr, meta PunchMetadata) {

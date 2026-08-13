@@ -2,6 +2,7 @@ package realm
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"testing"
 
@@ -83,22 +84,58 @@ func TestPunchPacketRejectsBadLengths(t *testing.T) {
 
 func TestPunchPacketRejectsUnknownType(t *testing.T) {
 	meta := testPunchMetadata()
-	_, obfsKey, err := decodePunchMetadata(meta)
+	key, err := newPunchKey(meta)
 	require.NoError(t, err)
 
 	packet := make([]byte, punchMinWireLen)
 	copy(packet[:punchSaltLen], []byte("12345678"))
-	plain := packet[punchSaltLen:]
+	binary.BigEndian.PutUint32(packet[punchSaltLen:punchSaltLen+punchTagLen], key.tag)
+	plain := packet[punchSaltLen+punchTagLen:]
 	copy(plain[:len(punchMagic)], punchMagic[:])
 	plain[len(punchMagic)] = 0xff
-	nonce, _, err := decodePunchMetadata(meta)
-	require.NoError(t, err)
-	copy(plain[len(punchMagic)+1:punchHeaderLen], nonce)
-	xorPunchPacket(plain, obfsKey, packet[:punchSaltLen])
+	copy(plain[len(punchMagic)+1:punchHeaderLen], key.nonce)
+	xorPunchPacket(plain, key.obfsKey, packet[:punchSaltLen])
 
 	_, err = DecodePunchPacket(packet, meta)
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrInvalidPunchPacket))
+	assert.ErrorIs(t, err, ErrInvalidPunchPacket)
+	assert.Contains(t, err.Error(), "unknown packet type")
+}
+
+// The attempt tag is what lets the demux find the attempt in one lookup, so it
+// has to be on the wire, stable per attempt, and different between attempts.
+func TestPunchPacketTagIdentifiesAttempt(t *testing.T) {
+	meta := testPunchMetadata()
+	key, err := newPunchKey(meta)
+	require.NoError(t, err)
+
+	for range 8 {
+		packet, err := EncodePunchPacket(PunchPacketHello, meta)
+		require.NoError(t, err)
+		tag, ok := punchPacketTag(packet)
+		require.True(t, ok)
+		assert.Equal(t, key.tag, tag)
+	}
+
+	other, err := newPunchKey(PunchMetadata{
+		Nonce: "ffffffffffffffffffffffffffffffff",
+		Obfs:  meta.Obfs,
+	})
+	require.NoError(t, err)
+	assert.NotEqual(t, key.tag, other.tag)
+}
+
+func TestPunchPacketTagMismatchIsCheap(t *testing.T) {
+	meta := testPunchMetadata()
+	packet, err := EncodePunchPacket(PunchPacketHello, meta)
+	require.NoError(t, err)
+	// Corrupting the tag must be rejected on the tag alone: the demux relies on
+	// a wrong tag never reaching the obfuscation layer.
+	packet[punchSaltLen] ^= 0xff
+
+	_, err = DecodePunchPacket(packet, meta)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "tag mismatch")
 }
 
 func TestPunchPacketRejectsBadMetadata(t *testing.T) {

@@ -68,8 +68,9 @@ func TestPunchAcceptsPredictedSymmetricNATPort(t *testing.T) {
 
 	clientAddr := packetConnAddrPort(t, client)
 	peerAddr := packetConnAddrPort(t, peer)
-	// Announce two consecutive ports below the real one: expansion covers the
-	// announced range plus symmetricNATExtraPorts, so the real port is in it.
+	// Announce two consecutive ports below the real one. Two ports on one host
+	// is what marks the peer as endpoint-dependent, and the first probe tier
+	// walks outwards from the announced ports, so the real one is reached.
 	announced := []netip.AddrPort{
 		netip.AddrPortFrom(peerAddr.Addr(), peerAddr.Port()-2),
 		netip.AddrPortFrom(peerAddr.Addr(), peerAddr.Port()-1),
@@ -131,7 +132,7 @@ func TestServerPuncherAcceptsSourceOutsideCandidates(t *testing.T) {
 	meta := testPunchMetadata()
 	server, wrapped, puncher := newTestServerPuncher(t, ctx)
 	defer server.Close()
-	pumpPunchPacketConn(wrapped)
+	pumpPunchPacketConn(t, wrapped)
 	client := listenUDP4(t)
 	defer client.Close()
 
@@ -161,7 +162,7 @@ func TestServerPuncherCandidatePolicyRejectsSourceOutsideCandidates(t *testing.T
 	meta := testPunchMetadata()
 	server, wrapped, puncher := newTestServerPuncher(t, ctx)
 	defer server.Close()
-	pumpPunchPacketConn(wrapped)
+	pumpPunchPacketConn(t, wrapped)
 	client := listenUDP4(t)
 	defer client.Close()
 
@@ -227,7 +228,7 @@ func TestCandidatePunchAddrsCapsCandidateCount(t *testing.T) {
 	}
 
 	candidates := candidatePunchAddrs(local, peer, AddrFamilyAny)
-	assert.LessOrEqual(t, len(candidates), maxPunchCandidates)
+	assert.LessOrEqual(t, len(candidates), maxPunchPeerAddrs)
 	assert.NotEmpty(t, candidates)
 }
 
