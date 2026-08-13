@@ -18,6 +18,34 @@ const (
 	symmetricNATPortGap         = 4
 	symmetricNATExtraPorts      = 4
 	symmetricNATMaxPortsPerHost = 32
+
+	// The rendezvous server chooses the addresses a peer punches at, so the
+	// candidate set is attacker-controlled input. Cap it to bound the punch
+	// traffic a malicious realm can aim at a third party.
+	maxPunchPeerAddrs  = 16
+	maxPunchCandidates = 64
+)
+
+// PunchSourcePolicy decides which packet sources a punch attempt accepts.
+// The rendezvous server can mint valid-looking punch packets, so the source
+// address is the only thing separating the intended peer from one the realm
+// picked. See the package documentation for why the initiator and the
+// responder default to different policies.
+type PunchSourcePolicy int
+
+const (
+	// PunchSourceDefault applies the policy for the role: PunchSourceCandidates
+	// for the initiator, PunchSourceAny for the responder.
+	PunchSourceDefault PunchSourcePolicy = iota
+	// PunchSourceCandidates accepts only addresses in the candidate set, which
+	// includes the ports predicted for symmetric NAT peers.
+	PunchSourceCandidates
+	// PunchSourceCandidateHosts accepts any port on a candidate host, for peers
+	// behind a symmetric NAT whose ports cannot be predicted.
+	PunchSourceCandidateHosts
+	// PunchSourceAny accepts every source that decodes with the attempt's
+	// metadata.
+	PunchSourceAny
 )
 
 var (
@@ -26,9 +54,10 @@ var (
 )
 
 type PunchConfig struct {
-	Timeout  time.Duration
-	Interval time.Duration
-	Family   AddrFamily
+	Timeout      time.Duration
+	Interval     time.Duration
+	Family       AddrFamily
+	SourcePolicy PunchSourcePolicy
 }
 
 type PunchResult struct {
@@ -38,6 +67,11 @@ type PunchResult struct {
 
 // Punch performs pre-QUIC UDP hole punching. It owns conn reads until it
 // returns, so it must run before handing the socket to QUIC.
+//
+// The returned peer address is always one the caller asked for: sources
+// outside the candidate set are ignored rather than reported, so a rendezvous
+// server cannot answer with metadata of its own and hand the caller a QUIC
+// peer it never announced.
 func Punch(ctx context.Context, conn net.PacketConn, localAddrs, peerAddrs []netip.AddrPort, meta PunchMetadata, config PunchConfig) (PunchResult, error) {
 	if conn == nil {
 		return PunchResult{}, fmt.Errorf("%w: conn is nil", ErrInvalidPunchConfig)
@@ -45,10 +79,15 @@ func Punch(ctx context.Context, conn net.PacketConn, localAddrs, peerAddrs []net
 	if _, _, err := decodePunchMetadata(meta); err != nil {
 		return PunchResult{}, err
 	}
+	policy, err := resolvePunchSourcePolicy(config.SourcePolicy, PunchSourceCandidates)
+	if err != nil {
+		return PunchResult{}, err
+	}
 	candidates := candidatePunchAddrs(localAddrs, peerAddrs, effectiveFamily(config.Family, conn.LocalAddr()))
 	if len(candidates) == 0 {
 		return PunchResult{}, fmt.Errorf("%w: no compatible peer addresses", ErrInvalidPunchConfig)
 	}
+	sources := newPunchSourceFilter(candidates, policy)
 	timeout := config.Timeout
 	if timeout == 0 {
 		timeout = defaultPunchTimeout
@@ -99,6 +138,11 @@ func Punch(ctx context.Context, conn net.PacketConn, localAddrs, peerAddrs []net
 		if !ok {
 			continue
 		}
+		// Drop before decoding so an untrusted source never gets an ack back,
+		// which would also confirm to it that the metadata was right.
+		if !sources.allows(peerAddr) {
+			continue
+		}
 		packet, err := DecodePunchPacket(buf[:n], meta)
 		if err != nil {
 			continue
@@ -110,6 +154,55 @@ func Punch(ctx context.Context, conn net.PacketConn, localAddrs, peerAddrs []net
 			PeerAddr: peerAddr,
 			Packet:   packet,
 		}, nil
+	}
+}
+
+func resolvePunchSourcePolicy(policy, fallback PunchSourcePolicy) (PunchSourcePolicy, error) {
+	switch policy {
+	case PunchSourceDefault:
+		return fallback, nil
+	case PunchSourceCandidates, PunchSourceCandidateHosts, PunchSourceAny:
+		return policy, nil
+	default:
+		return 0, fmt.Errorf("%w: unknown source policy", ErrInvalidPunchConfig)
+	}
+}
+
+type punchSourceFilter struct {
+	policy PunchSourcePolicy
+	addrs  map[netip.AddrPort]struct{}
+	hosts  map[netip.Addr]struct{}
+}
+
+func newPunchSourceFilter(candidates []netip.AddrPort, policy PunchSourcePolicy) punchSourceFilter {
+	filter := punchSourceFilter{policy: policy}
+	switch policy {
+	case PunchSourceCandidates:
+		filter.addrs = make(map[netip.AddrPort]struct{}, len(candidates))
+		for _, addr := range candidates {
+			filter.addrs[addr] = struct{}{}
+		}
+	case PunchSourceCandidateHosts:
+		filter.hosts = make(map[netip.Addr]struct{}, len(candidates))
+		for _, addr := range candidates {
+			filter.hosts[addr.Addr()] = struct{}{}
+		}
+	}
+	return filter
+}
+
+func (f punchSourceFilter) allows(addr netip.AddrPort) bool {
+	switch f.policy {
+	case PunchSourceCandidates:
+		_, ok := f.addrs[addr]
+		return ok
+	case PunchSourceCandidateHosts:
+		_, ok := f.hosts[addr.Addr()]
+		return ok
+	case PunchSourceAny:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -129,10 +222,18 @@ func sendPunchPacket(conn net.PacketConn, addr netip.AddrPort, meta PunchMetadat
 
 func candidatePunchAddrs(localAddrs, peerAddrs []netip.AddrPort, family AddrFamily) []netip.AddrPort {
 	allowedFamilies := punchFamilies(localAddrs, family)
+	allowLoopback := containsLoopback(localAddrs)
 	seen := make(map[netip.AddrPort]struct{})
 	var candidates []netip.AddrPort
 	for _, addr := range peerAddrs {
-		if !addr.IsValid() || addr.Port() == 0 {
+		if len(candidates) >= maxPunchPeerAddrs {
+			break
+		}
+		// Received addresses are unmapped (see addrToAddrPort), so candidates
+		// must be too, or a peer announced in v4-in-v6 form would be punched
+		// but never accepted.
+		addr = netip.AddrPortFrom(addr.Addr().Unmap(), addr.Port())
+		if !punchableTarget(addr, allowLoopback) {
 			continue
 		}
 		if !allowedFamilies.allows(addr.Addr()) {
@@ -147,6 +248,32 @@ func candidatePunchAddrs(localAddrs, peerAddrs []netip.AddrPort, family AddrFami
 	candidates = expandSymmetricNATCandidates(candidates, seen)
 	sortAddrPorts(candidates)
 	return candidates
+}
+
+// punchableTarget rejects addresses that are meaningless or dangerous as punch
+// targets. Peer addresses come from the rendezvous server, which must not be
+// able to make a client spray packets at its own services or at a broadcast
+// group.
+func punchableTarget(addr netip.AddrPort, allowLoopback bool) bool {
+	if !addr.IsValid() || addr.Port() == 0 {
+		return false
+	}
+	ip := addr.Addr()
+	if ip.IsUnspecified() || ip.IsMulticast() {
+		return false
+	}
+	// Loopback is only a real peer address when we are one ourselves, which in
+	// practice means tests: STUN never reflects a loopback address.
+	return !ip.IsLoopback() || allowLoopback
+}
+
+func containsLoopback(addrs []netip.AddrPort) bool {
+	for _, addr := range addrs {
+		if addr.IsValid() && addr.Addr().IsLoopback() {
+			return true
+		}
+	}
+	return false
 }
 
 func expandSymmetricNATCandidates(candidates []netip.AddrPort, seen map[netip.AddrPort]struct{}) []netip.AddrPort {
@@ -168,6 +295,9 @@ func expandSymmetricNATCandidates(candidates []netip.AddrPort, seen map[netip.Ad
 		}
 		added := 0
 		for port := start; port <= end && added < symmetricNATMaxPortsPerHost; port++ {
+			if len(candidates) >= maxPunchCandidates {
+				return candidates
+			}
 			addr := netip.AddrPortFrom(ip, uint16(port))
 			if _, ok := seen[addr]; ok {
 				continue

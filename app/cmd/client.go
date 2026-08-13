@@ -794,9 +794,13 @@ func (c *clientConfig) realmConfig(addr *realm.Addr) (*client.Config, error) {
 		zap.String("attempt", attempt),
 		zap.Strings("candidates", connectResp.Addresses))
 	punchStart := time.Now()
+	// The punch peer becomes the QUIC server address, and the rendezvous server
+	// knows the punch metadata, so pin the accepted sources to the candidates
+	// it announced. Authentication still comes from the TLS pin and password.
 	result, err := realm.Punch(ctx, baseConn, localAddrs, peerAddrs, connectResp.PunchMetadata, realm.PunchConfig{
-		Timeout: c.Realm.PunchTimeout,
-		Family:  family,
+		Timeout:      c.Realm.PunchTimeout,
+		Family:       family,
+		SourcePolicy: realm.PunchSourceCandidates,
 	})
 	if err != nil {
 		return nil, configError{Field: "realm.punch", Err: err}
