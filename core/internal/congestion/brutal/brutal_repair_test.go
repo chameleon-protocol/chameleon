@@ -38,6 +38,21 @@ const (
 	chromePNLen2Limit = 1 << 16 / 4 // 16384
 )
 
+// quicGoInitialWindowPackets is quic-go's own initial congestion window
+// (internal/congestion/cubic_sender.go, initialCongestionWindow = 32; bbr's
+// initialCongestionWindowPackets is the same figure). It is written out rather
+// than derived from cwndFloorPackets on purpose: a test that reads the constant
+// it is checking asserts nothing about it. What is being asserted is that this
+// controller never allows fewer bytes outstanding than a standard controller
+// does on its very first flight, and the number that says so lives in quic-go.
+const quicGoInitialWindowPackets = 32
+
+// maxCompensation is the most the ack rate divisor may multiply the send rate
+// by, which is 1/minAckRate. Also written out rather than derived: the design
+// commits to "past 20% loss the compensation is deliberately incomplete", and
+// 1.25x is what that sentence means (docs/research/brutal.md section 3.1).
+const maxCompensation = 1.25
+
 func chromePNLen(cwndPackets float64) int {
 	n := int64(cwndPackets)
 	switch {
@@ -60,15 +75,15 @@ func TestCwndFloor(t *testing.T) {
 		b := newSender(bps, false, rtt)
 		got := packets(b)
 		t.Logf("%-14d %-12d %-10.1f", bps, b.GetCongestionWindow(), got)
-		if got < cwndFloorPackets {
-			t.Errorf("declared %d B/s at a %v round trip: cwnd is %.1f packets, floor is %d",
-				bps, rtt.smoothed, got, cwndFloorPackets)
+		if got < quicGoInitialWindowPackets {
+			t.Errorf("declared %d B/s at a %v round trip: cwnd is %.1f packets, and quic-go's own controllers start at %d",
+				bps, rtt.smoothed, got, quicGoInitialWindowPackets)
 		}
 	}
 	// The floor is a floor and not a replacement: a declaration whose own
 	// product already exceeds it must be left alone.
 	b := newSender(1<<30, false, rtt)
-	if packets(b) <= cwndFloorPackets {
+	if packets(b) <= quicGoInitialWindowPackets {
 		t.Errorf("1 GB/s should exceed the floor on its own, got %.1f packets", packets(b))
 	}
 }
@@ -129,9 +144,23 @@ func TestCwndBoundsQueueing(t *testing.T) {
 
 	base := b.GetCongestionWindow()
 	want := congestion.ByteCount(cwndRTTClampK) * base // the ceiling the clamp sets
+	bdp := float64(declared) * minRTT.Seconds()
 	t.Logf("declared %d B/s, minRTT %v: cwnd %d B (%.0f packets, %.1f x BDP), clamped ceiling %d B",
-		declared, minRTT, base, packets(b),
-		float64(base)/(float64(declared)*minRTT.Seconds()), want)
+		declared, minRTT, base, packets(b), float64(base)/bdp, want)
+
+	// The absolute bound the design commits to, stated as the number rather
+	// than as a function of the constant under test: four bandwidth-delay
+	// products at the path minimum, of which one fills the pipe, one covers ack
+	// aggregation and delayed acks, and the remaining two are the queueing this
+	// sender is willing to tolerate before it stops following. Raising
+	// cwndRTTClampK past two has to fail here -- the tolerated queue is what
+	// everyone else behind the bottleneck pays.
+	// See docs/research/brutal.md section 3.2.
+	if got, ceiling := float64(want), 4*bdp; got > ceiling {
+		t.Errorf("the clamped window is %.0f B, %.1f x the BDP at the path minimum; the design's bound is 4x (%.0f B)",
+			got, got/bdp, ceiling)
+	}
+
 	for _, srtt := range []time.Duration{
 		minRTT, 25 * time.Millisecond, 50 * time.Millisecond, 200 * time.Millisecond,
 		800 * time.Millisecond, 1600 * time.Millisecond, 100 * minRTT,
@@ -192,6 +221,15 @@ func TestCwndSurvivesAPathDelayRise(t *testing.T) {
 		if mult <= envelope && rate < declared*0.999 {
 			t.Errorf("SRTT %v (%dx the path minimum, inside the %dx envelope): the window caps the sender at %.0f B/s, declared %d",
 				srtt, mult, envelope, rate, declared)
+		}
+		// The measured regression, written as the number it was measured at
+		// rather than as a function of the constant under test. A tripled round
+		// trip on a link with capacity to spare is the case that cost 30% of the
+		// declared rate, and no retuning of cwndRTTClampK may bring it back
+		// without this failing.
+		if mult == 3 && rate < declared {
+			t.Errorf("SRTT %v is three times the path minimum on a link with room: %.0f B/s against a declared %d -- this is the regression the clamp exists for",
+				srtt, rate, declared)
 		}
 	}
 }
@@ -301,6 +339,18 @@ func TestNoCompensationWithoutAcks(t *testing.T) {
 	feedLoss(c, 6, 500, 0.50)
 	if c.ackRate != minAckRate {
 		t.Errorf("ackRate = %.2f under 50%% loss with acks arriving, want the %.2f floor", c.ackRate, minAckRate)
+	}
+	// And the floor is a bound on what reaches the wire, which is the thing the
+	// design actually commits to: a collapsing path must not be answered with
+	// unbounded over-sending, because that is self-excitation. The tolerance is
+	// the pacer simulation's own error, not slack in the bound.
+	wire := pacedRate(c, time.Second, 100*time.Microsecond)
+	if wire > maxCompensation*1.02*(2<<20) {
+		t.Errorf("50%% loss is paced at %.0f B/s, x%.2f a declared %d: compensation is bounded at x%.2f",
+			wire, wire/(2<<20), 2<<20, maxCompensation)
+	}
+	if wire < 1.15*(2<<20) {
+		t.Errorf("50%% loss is paced at %.0f B/s: the floor should still buy the flow something", wire)
 	}
 }
 
