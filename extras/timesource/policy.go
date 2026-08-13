@@ -8,7 +8,7 @@ import (
 )
 
 // BuildTimeOverride can be set at link time
-// (-X github.com/apernet/hysteria/extras/v2/timesource.BuildTimeOverride=<RFC3339>)
+// (-X github.com/chameleon-protocol/chameleon/extras/v2/timesource.BuildTimeOverride=<RFC3339>)
 // for builds that carry no VCS stamp, such as release builds from a source
 // tarball.
 var BuildTimeOverride string
