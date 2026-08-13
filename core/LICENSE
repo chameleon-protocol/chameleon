@@ -1,0 +1,7 @@
+chameleon is licensed under the GNU General Public License version 3.
+The full text is in the LICENSE file at the root of this repository.
+
+This module descends in part from Hysteria (https://github.com/apernet/hysteria),
+which is under the MIT license. That notice is preserved in LICENSE.MIT at the
+repository root and applies to every part of this module still descending from
+that work.

@@ -1,6 +1,6 @@
 # chameleon
 
-[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE.md)
+[![License](https://img.shields.io/badge/license-GPLv3-blue)](LICENSE)
 
 > **chameleon is a fork of [Hysteria 2](https://github.com/apernet/hysteria)** (hy2).
 > It inherits Hysteria's QUIC data plane, Brutal congestion control, and HTTP/3
@@ -66,5 +66,14 @@ Requires Go (version pinned in `go.work`) and Python 3. The binary lands in `bui
 
 ## License
 
-MIT — see [LICENSE.md](LICENSE.md). Copyright in the upstream work this derives from
-remains with the Hysteria authors.
+**GPLv3** — see [LICENSE](LICENSE). Hysteria is MIT; chameleon is not.
+
+If you ship chameleon, or anything built on it, you ship the source. Run a modified
+version as a service and your users are entitled to the modifications. That is the
+point: a censorship-resistant transport whose changes can disappear into a
+proprietary build is one whose users cannot audit what they are trusting.
+
+Upstream Hysteria remains under MIT, and its notice is preserved in
+[LICENSE.MIT](LICENSE.MIT) — MIT permits this relicensing precisely on the
+condition that the notice stays intact. It applies to every part of this tree still
+descending from that work.
