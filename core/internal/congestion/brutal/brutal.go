@@ -69,6 +69,39 @@ const (
 	// bytes outstanding than a standard controller allows on its first flight.
 	cwndFloorPackets = 32
 
+	// rebaselineWindow and rebaselineMinSamples are how much evidence the
+	// controller collects after a path change before it believes it knows the
+	// new path's minimum round trip -- see rebaseline.
+	//
+	// Eight samples is quic-go's own answer to "how many samples describe a
+	// path": its smoothed round trip is an EWMA with alpha = 1/8
+	// (internal/utils/rtt_stats.go, rttAlpha), so 1/alpha samples is what it
+	// takes for the previous path to be forgotten there. Committing a floor
+	// from fewer than that would commit it against a smoothed round trip that
+	// is still partly the old path's, and the delay gate's whole verdict is the
+	// ratio between the two.
+	//
+	// Half a second is the wall clock those samples must also span, because a
+	// count on its own bounds nothing: eight acknowledgements can all belong to
+	// one flight, and one flight sees one queue state. Five times quic-go's
+	// DefaultInitialRTT (100ms -- the round trip it assumes for a path it has
+	// never measured) is several flights of any path worth switching to. The
+	// ceiling on it is P1's: the switch acceptance criterion measures
+	// throughput over the two seconds after a switch
+	// (docs/design/p1-disco-selector.md, T6), so a window eating more than a
+	// quarter of that would be measured as the regression it exists to prevent.
+	//
+	// What settles the value between those bounds is that the two errors are
+	// not symmetric. Too short, and the floor is committed from a queue that
+	// had not drained yet -- and that error is permanent, because the window it
+	// then sizes is what keeps the queue full (see rebaseline). Too long, and
+	// the sender spends the window clamped to the previous path's minimum,
+	// which costs throughput, costs nothing else, and ends when the window
+	// does. The window is therefore set generously against the recoverable
+	// error rather than tightly against the permanent one.
+	rebaselineWindow     = 500 * time.Millisecond
+	rebaselineMinSamples = 8
+
 	// congestionRTTRatio and relievedRTTRatio are the delay gate that decides
 	// whether loss should be compensated for -- see updateCongestionGate.
 	congestionRTTRatio = 1.5
@@ -136,11 +169,20 @@ type BrutalSender struct {
 	// see OnCongestionEventEx.
 	lostPNs map[congestion.PacketNumber]int64
 
-	// minRTTFloor is the smallest round trip seen since the last OnPathChange.
-	// It is only consulted after a path change; before one, the RTTStats
-	// lifetime minimum is both correct and better seeded.
-	minRTTFloor    time.Duration
-	pathHasChanged bool
+	// minRTTFloor is the current path's minimum round trip, once rebaselining
+	// has produced one to believe. Zero means there is none yet -- before any
+	// path change, and during the window after one -- and the estimate then
+	// falls back to the RTTStats lifetime minimum.
+	minRTTFloor time.Duration
+	// rebaselineMin is the smallest round trip sampled since the last
+	// OnPathChange, rebaselineSamples how many samples that is, and
+	// rebaselineStart when the first of them arrived. A sample count of zero is
+	// what says the window has not opened, so that a legitimate zero event time
+	// is not mistaken for one.
+	rebaselineMin     time.Duration
+	rebaselineSamples int
+	rebaselineStart   monotime.Time
+	pathHasChanged    bool
 
 	disableLossCompensation bool
 
@@ -221,6 +263,11 @@ func (b *BrutalSender) SetBPS(bps uint64) {
 // longer path, a stale small minimum would hold the congestion window below the
 // new path's bandwidth-delay product and would keep the delay gate permanently
 // shut.
+//
+// It does not take effect at once, and deliberately so: the new path's minimum
+// has to be measured before it can be used, and the measurement is only worth
+// having if the sender is held down while it is taken. See rebaseline for what
+// that costs and why it is the cheaper of the two available mistakes.
 func (b *BrutalSender) OnPathChange() {
 	b.pathReset.Store(true)
 }
@@ -233,6 +280,8 @@ func (b *BrutalSender) drainPending() {
 	if b.pathReset.CompareAndSwap(true, false) {
 		b.pathHasChanged = true
 		b.minRTTFloor = 0
+		b.rebaselineMin = 0
+		b.rebaselineSamples = 0
 	}
 }
 
@@ -355,12 +404,63 @@ func (b *BrutalSender) windowRTT() time.Duration {
 //
 // A lifetime minimum cannot inflate. It can only be stale, and staleness has
 // exactly one cause worth handling: the path was replaced. OnPathChange says
-// so, and from then on the estimate is the minimum of what has been seen since.
+// so, and rebaseline measures what to put in its place.
 func (b *BrutalSender) minRTT() time.Duration {
-	if b.pathHasChanged && b.minRTTFloor > 0 {
+	if b.minRTTFloor > 0 {
 		return b.minRTTFloor
 	}
 	return b.rttStats.MinRTT()
+}
+
+// rebaseline folds one round trip sample into the new path's minimum and
+// commits the result once there is enough of it to believe.
+//
+// The tempting version -- take the minimum of everything seen since the path
+// changed, and use it from the first sample onwards -- is what this replaces,
+// and its failure mode does not recover on its own. A switch that lands while
+// something is queueing measures the queue; the window is then sized from that
+// inflated figure, at 2K x bps x floor; a window that large keeps the queue
+// full; and a queue that stays full never produces the lower sample that would
+// correct the floor. The estimate is wrong, the wrongness is what holds it in
+// place, and nothing short of another path change ends it. Note which way K
+// cuts here: the same factor that buys throughput on a path whose delay rose
+// doubles the window sustaining this.
+//
+// So the floor is committed only from rebaselineMinSamples samples spanning
+// rebaselineWindow, and until then minRTT stays on the RTTStats lifetime
+// minimum. That fallback is not a placeholder for the answer -- it is what
+// makes the answer measurable. The lifetime minimum belongs to the previous
+// path, so on a longer new path it under-sizes the window, which is exactly the
+// condition under which this sender stops adding to a queue of its own and the
+// samples start describing the path rather than the sender. Neither half works
+// alone: a window with no fallback measures the queue it is itself building,
+// and a fallback with no window never stops paying for it.
+//
+// This is not the rolling minimum docs/research/brutal.md section 3.1 rejects,
+// and the difference is the drain. A rolling window as the standing estimator
+// is wrong here because Brutal never backs off: on an over-declared path every
+// sample carries the queue, so the window ratchets the estimate -- and the
+// congestion window with it -- up to whatever the standing queue costs. This
+// one runs once per path change, over a sender deliberately held down for its
+// duration, and hands back to the lifetime-minimum rule when it is done. After
+// the commit the floor may still fall and can never rise, which is the same
+// property a lifetime minimum has and the reason a queue cannot ratchet it.
+func (b *BrutalSender) rebaseline(eventTime monotime.Time) {
+	latest := b.rttStats.LatestRTT()
+	if latest <= 0 {
+		return
+	}
+	if b.rebaselineSamples == 0 {
+		b.rebaselineStart = eventTime
+	}
+	b.rebaselineSamples++
+	if b.rebaselineMin == 0 || latest < b.rebaselineMin {
+		b.rebaselineMin = latest
+	}
+	if b.minRTTFloor > 0 || (b.rebaselineSamples >= rebaselineMinSamples &&
+		eventTime.Sub(b.rebaselineStart) >= rebaselineWindow) {
+		b.minRTTFloor = b.rebaselineMin
+	}
 }
 
 func (b *BrutalSender) OnPacketSent(sentTime monotime.Time, bytesInFlight congestion.ByteCount,
@@ -401,9 +501,7 @@ func (b *BrutalSender) OnCongestionEventEx(priorInFlight congestion.ByteCount, e
 		// A fresh round trip sample belongs to the new path. Only sample where
 		// there are acknowledgements: a loss-timer call carries whatever the
 		// previous path last measured.
-		if latest := b.rttStats.LatestRTT(); latest > 0 && (b.minRTTFloor == 0 || latest < b.minRTTFloor) {
-			b.minRTTFloor = latest
-		}
+		b.rebaseline(eventTime)
 	}
 
 	currentTimestamp := int64(time.Duration(eventTime) / time.Second)

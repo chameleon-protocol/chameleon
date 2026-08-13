@@ -31,24 +31,38 @@ import (
 // fakeRTT is an RTTStatsProvider whose values the test sets directly, which is
 // the only way to ask "what is cwnd at SRTT = 800ms" without waiting for a path
 // that actually has one.
+// latest tracks smoothed unless a test moves it on its own, which keeps every
+// caller of set that predates it unchanged. It is separately settable because
+// the two are separately meaningful to the controller -- the congestion window
+// follows the smoothed round trip, the path minimum is rebaselined from the
+// latest samples -- and a fake that tied them together could not tell a test
+// that read the wrong one from a test that read the right one.
 type fakeRTT struct {
 	min      time.Duration
 	smoothed time.Duration
+	latest   time.Duration
 }
 
 func (f *fakeRTT) MinRTT() time.Duration                 { return f.min }
-func (f *fakeRTT) LatestRTT() time.Duration              { return f.smoothed }
+func (f *fakeRTT) LatestRTT() time.Duration              { return f.latest }
 func (f *fakeRTT) SmoothedRTT() time.Duration            { return f.smoothed }
 func (f *fakeRTT) MeanDeviation() time.Duration          { return 0 }
 func (f *fakeRTT) MaxAckDelay() time.Duration            { return 0 }
 func (f *fakeRTT) PTO(bool) time.Duration                { return f.smoothed * 2 }
 func (f *fakeRTT) UpdateRTT(_, _ time.Duration)          {}
 func (f *fakeRTT) SetMaxAckDelay(_ time.Duration)        {}
-func (f *fakeRTT) SetInitialRTT(t time.Duration)         { f.smoothed = t }
+func (f *fakeRTT) SetInitialRTT(t time.Duration)         { f.smoothed, f.latest = t, t }
 func (f *fakeRTT) String() string                        { return f.smoothed.String() }
-func (f *fakeRTT) set(min, smoothed time.Duration)       { f.min, f.smoothed = min, smoothed }
-func newFakeRTT(min, smoothed time.Duration) *fakeRTT    { return &fakeRTT{min: min, smoothed: smoothed} }
+func (f *fakeRTT) setLatest(latest time.Duration)        { f.latest = latest }
 func (f *fakeRTT) provider() congestion.RTTStatsProvider { return f }
+
+func (f *fakeRTT) set(min, smoothed time.Duration) {
+	f.min, f.smoothed, f.latest = min, smoothed, smoothed
+}
+
+func newFakeRTT(min, smoothed time.Duration) *fakeRTT {
+	return &fakeRTT{min: min, smoothed: smoothed, latest: smoothed}
+}
 
 // simBase is an arbitrary non-zero origin for the simulated clock. The pacer
 // treats a zero lastSentTime as "never sent", so a simulation that starts at 0
