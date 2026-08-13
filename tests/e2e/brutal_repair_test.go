@@ -69,6 +69,64 @@ func TestBrutalRunsOnShortPaths(t *testing.T) {
 	}
 }
 
+// TestBrutalSurvivesAPathDelayRise is the regression that decided how far the
+// congestion window may follow the smoothed round trip.
+//
+// A window pinned to the path's lifetime minimum bounds in flight at
+// 2 x bps x minRTT, which caps the achievable rate at 2 x bps x minRTT / R for
+// a round trip of R. That is fine while R is the sender's own queue -- the
+// point of the bound is to stop the sender inflating R -- and it is wrong when
+// R rose for a reason the sender had nothing to do with: a reroute, congestion
+// at the far end, a handover to a slower access network. The link below has
+// eight times the declared rate to spare and nothing of ours can be queueing on
+// it, and the round trip still triples. Measured with the window pinned to the
+// minimum, goodput fell to 69.7% of the declared rate and stayed there; the
+// arithmetic agrees, 2 x 20/60 = 0.67.
+//
+// The 3x rise is chosen because it is the edge of the envelope: with a clamp of
+// K the sender stays rate-bound while the round trip is inside 2K x minRTT, so
+// K = 2 tolerates 4x and is asserted at 3x with room to spare. A path that
+// stretches further than that does lose rate, and that is the trade -- see
+// docs/research/brutal.md section 3.2.
+func TestBrutalSurvivesAPathDelayRise(t *testing.T) {
+	if testing.Short() {
+		t.Skip("two transfers, and the first one exists only to establish the path minimum")
+	}
+	const declared = 1 << 20
+	const linkRate = 8 * declared // capacity to spare, so nothing here is a queue
+	const shortRTT = 20 * time.Millisecond
+	const longRTT = 3 * shortRTT
+
+	base := netem.RateLimited(linkRate)
+	env := harness.New(t, harness.Options{
+		Profile:   base.WithRTT(shortRTT).Named("rate8MB/s+rtt20ms"),
+		Seed:      7,
+		Bandwidth: harness.Bandwidth{BytesPerSec: declared},
+	})
+
+	// The path minimum has to be the short path's, which is the whole premise:
+	// a controller that never saw 20ms has nothing stale to be held back by.
+	warm, err := env.TCPThroughput(1<<20, 30*time.Second)
+	require.NoError(t, err)
+
+	// The path itself gets longer. Same link, same rate, same buffer.
+	env.Ctrl.Set(base.WithRTT(longRTT).Named("rate8MB/s+rtt60ms"))
+	// Let the smoothed round trip find the new path before measuring: the
+	// estimator is an EWMA, and the transfer would otherwise spend its first
+	// stretch reporting the old path's figure.
+	_, err = env.TCPLatency(20, 2, 20*time.Millisecond, 30*time.Second)
+	require.NoError(t, err)
+
+	bps, err := env.TCPThroughput(3<<20, 60*time.Second)
+	require.NoError(t, err)
+	t.Logf("declared %s: %s at a %v round trip, %s after it rose to %v (%.1f%% of the declaration)",
+		metrics.FormatRate(declared), metrics.FormatRate(warm), shortRTT,
+		metrics.FormatRate(bps), longRTT, bps/float64(declared)*100)
+
+	assert.Greater(t, bps, 0.9*float64(declared),
+		"a path whose own delay rose is not a queue this sender made, and must not cost it its declared rate")
+}
+
 // TestBrutalBlackholeRecovery is E8. While a path is blackholed the controller
 // sees losses and no acknowledgements at all, which the ack ratio used to read
 // as 100% loss and clamp to its floor -- so at the instant the path came back,
@@ -134,10 +192,13 @@ func TestBrutalBlackholeRecovery(t *testing.T) {
 
 	require.NotZero(t, peak, "the flow never resumed, so there is nothing to measure")
 	// The floor of the ack ratio is 0.8, so an over-send driven by it lands at
-	// 1.25x. Anything meaningfully below that is the "no acknowledgements is not
-	// a loss rate" rule holding. The allowance above the declared rate covers
-	// the retransmissions of what the blackhole swallowed, which are real work
-	// and are not what this is about.
-	assert.Less(t, ratio, 1.15,
+	// 1.25x. The bound is the one docs/research/brutal.md asks for -- 1.05x the
+	// declared rate -- rather than something merely below 1.25: measured at
+	// 1.037 and 1.036 across revisions, so a threshold set to just miss the
+	// defect would leave 12 points of room in which the rule could come back
+	// half-broken and still pass. What the remaining 5% covers is the
+	// retransmission of what the blackhole swallowed, which is real work and is
+	// not what this is about.
+	assert.Less(t, ratio, 1.05,
 		"a path with no acknowledgements at all is a path that is gone, not a path that is 100%% lossy")
 }

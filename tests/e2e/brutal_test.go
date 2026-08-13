@@ -133,12 +133,23 @@ func TestBrutalOverDeclarationCost(t *testing.T) {
 	const linkRate = 1 << 20
 	profile := netem.RateLimited(linkRate).WithRTT(50 * time.Millisecond).Named("rate1MB/s+rtt50ms")
 
-	var matched, over brutalResult
+	var matched, over, far brutalResult
 	t.Run("declared=link", func(t *testing.T) {
 		matched = measureBrutal(t, profile, harness.Bandwidth{BytesPerSec: linkRate}, 2<<20)
 	})
 	t.Run("declared=2x-link", func(t *testing.T) {
 		over = measureBrutal(t, profile, harness.Bandwidth{BytesPerSec: 2 * linkRate}, 2<<20)
+	})
+	// Eight times the link is the cell that says whether the bound is a bound or
+	// a coincidence of the 2x arithmetic. There is no threshold here that is not
+	// simply the 2x one restated, so what is asserted is the direction, which is
+	// the part that is a claim about the controller: however far the declaration
+	// is from the truth, it buys the sender nothing. The queue and the drop rate
+	// are logged, because at this declaration the window the clamp permits
+	// (4 x 8MB/s x 50ms = 1.6MB) is larger than the bed's own buffer, so tail
+	// drops are the link's answer rather than the controller's failure.
+	t.Run("declared=8x-link", func(t *testing.T) {
+		far = measureBrutal(t, profile, harness.Bandwidth{BytesPerSec: 8 * linkRate}, 2<<20)
 	})
 
 	// Declaring twice the link rate cannot conjure capacity, so the extra bytes
@@ -149,15 +160,23 @@ func TestBrutalOverDeclarationCost(t *testing.T) {
 		"an over-declared rate must not overflow the bottleneck's buffer")
 	assert.LessOrEqual(t, over.Goodput, matched.Goodput*1.05,
 		"over-declaring buys the sender nothing")
-	// The queue the window permits: at most twice the declared rate's
-	// bandwidth-delay product in flight, draining at the link's rate, which is
-	// 2 x 2MB/s x 50ms = 210KB over a 1MB/s link, or about 200ms on top of the
-	// link's own 50ms. The bound below is that arithmetic with room for noise.
-	// It was 832ms before the window stopped following the queue.
-	assert.Less(t, over.LatencyP9, 350*time.Millisecond,
+	assert.LessOrEqual(t, far.Goodput, matched.Goodput*1.05,
+		"over-declaring by 8x buys the sender nothing either")
+	// The queue the window permits: at most cwndRTTClampK x 2 x the declared
+	// rate's bandwidth-delay product in flight, draining at the link's rate,
+	// which is 2 x 2 x 2MB/s x 50ms = 420KB over a 1MB/s link, or about 400ms
+	// on top of the link's own 50ms. The bound below is that arithmetic with
+	// room for noise. It was 832ms before the window stopped following the queue
+	// without limit, and 204ms in the revision that pinned the window to the
+	// path minimum outright -- which is the same 2x that this cell gives back,
+	// bought at 30% of the declared rate on any path whose own delay rises.
+	assert.Less(t, over.LatencyP9, 600*time.Millisecond,
 		"the window must stop the standing queue growing, whatever the declaration says")
 	t.Logf("over-declaring 2x: %.2fx the bytes on the wire for %.2fx the goodput, p99 %v -> %v",
 		float64(over.WireIn)/float64(matched.WireIn),
 		over.Goodput/matched.Goodput,
 		matched.LatencyP9, over.LatencyP9)
+	t.Logf("over-declaring 8x: %.2fx the bytes on the wire for %.2fx the goodput, p99 %v, drop %.2f%%",
+		float64(far.WireIn)/float64(matched.WireIn),
+		far.Goodput/matched.Goodput, far.LatencyP9, far.DropRate*100)
 }

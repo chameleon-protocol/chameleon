@@ -40,6 +40,21 @@ const (
 	// the second covers ack aggregation, delayed acks and scheduling jitter.
 	congestionWindowMultiplier = 2
 
+	// cwndRTTClampK is how far above the path's minimum round trip the window
+	// is still allowed to follow the smoothed one -- see GetCongestionWindow.
+	//
+	// It is the one knob that trades this controller's throughput on a path
+	// whose delay rose against the queue it is willing to build. Two is the
+	// smallest value that leaves a path with capacity to spare running at the
+	// declared rate after its own round trip has risen: at K the window covers
+	// 2K x bps x minRTT, and delivering bps over a round trip of R needs
+	// bps x R, so the sender stays rate-bound while R <= 2K x minRTT -- four
+	// times the path minimum at K = 2. Below that (K = 1, which is what this
+	// controller shipped for one revision) a path that merely rerouted lost a
+	// third of its throughput with no queue of its own anywhere in sight.
+	// Above it the clamp stops bounding anything a bloated buffer can do.
+	cwndRTTClampK = 2
+
 	// cwndFloorPackets is the smallest window the controller will ask for,
 	// matching the initial window of quic-go's own controllers (cubic_sender.go
 	// initialCongestionWindow = 32, and bbr's initialCongestionWindowPackets).
@@ -244,42 +259,49 @@ func (b *BrutalSender) CanSend(bytesInFlight congestion.ByteCount) bool {
 
 // GetCongestionWindow returns the ceiling on bytes in flight.
 //
-// The window is built on the path's minimum round trip and not on the smoothed
-// one, which is the single most consequential difference from the original.
-// Using the smoothed round trip made the window a rising function of the queue
-// it was supposed to bound: the deeper the standing queue, the more bytes the
-// sender was allowed to add to it, so the queue grew until the bottleneck's
-// buffer tail-dropped. Measured at a 10 MB/s declaration, that reached 26214
-// packets in flight at a 1.6s smoothed round trip -- past the point quic-go
-// considers any controller should ever reach.
+// The window follows the smoothed round trip, clamped into [minRTT,
+// cwndRTTClampK x minRTT]. Both halves of that are load-bearing, and each one
+// is there because the other alone was measured to be wrong.
 //
-// It also has to hold still. On a client imitating Chrome, quic-go sizes the
-// packet number from this value (sent_packet_handler.PeekPacketNumber ->
-// PacketNumberLengthForHeaderChrome), which puts the window into bytes an
-// observer can read without decrypting anything. A window that tracked the
-// smoothed round trip made the packet number length a visible function of the
-// queue depth, and made it change when the path started losing. Built on the
-// minimum round trip, the length is a constant for a given declared rate: the
-// static difference remains, the moving one does not.
+// The clamp is the fix for the original. Unclamped, the window was a rising
+// function of the queue it was supposed to bound: the deeper the standing
+// queue, the more bytes the sender was allowed to add to it, so the queue grew
+// until the bottleneck's buffer tail-dropped. Measured at a 10 MB/s
+// declaration, that reached 26214 packets in flight at a 1.6s smoothed round
+// trip -- past the point quic-go considers any controller should ever reach.
+// With the clamp the feedback loop is cut: past twice the path minimum, more
+// queueing buys the sender no more room to queue with.
 //
-// One shift survives, and is worth naming rather than claiming it away. quic-go
-// seeds the minimum round trip at 100ms and replaces it outright with the first
-// real sample, so the length can change once, early, when the path's own figure
-// arrives. That happened before this change too, on top of the drift that did
-// not survive it.
+// Following the smoothed round trip up to that ceiling is the fix for the fix.
+// A window pinned to the lifetime minimum outright (K = 1, which this
+// controller shipped for one revision) cannot tell "my own queue raised the
+// round trip" from "the path's delay went up" -- a reroute, a peer's
+// congestion, a handover to a slower access network -- and answers both by
+// holding in flight to what the old, shorter path needed. Measured on a link
+// with eight times the declared rate to spare and nothing of ours queueing,
+// raising the path's own round trip from 20ms to 60ms cut goodput to 69.7% of
+// the declared rate, and did not recover: with 2 x bps x minRTT outstanding
+// over a round trip of R, the sender is capped at 2 x bps x minRTT / R however
+// empty the link is. Allowing the window out to 2K x bps x minRTT keeps it
+// rate-bound while the path stays inside four times its own minimum.
+//
+// The price is paid on the wire, and is worth naming rather than claiming
+// away. On a client imitating Chrome, quic-go sizes the packet number from
+// this value (sent_packet_handler.PeekPacketNumber ->
+// PacketNumberLengthForHeaderChrome), so the window is bytes an observer can
+// read without decrypting anything. A K-fold dynamic range is a K-fold range
+// in that figure, and a declared rate whose window sits near one of Chrome's
+// thresholds (64 packets, 16384) can now cross it as the round trip moves. The
+// unbounded version crossed those thresholds too, and kept going; what is left
+// is one band of movement instead of an open-ended trajectory. See
+// docs/research/brutal.md section 3.7 -- the alternative was keeping a
+// property the controller never fully had at the price of a throughput
+// regression on paths that do nothing wrong.
 //
 // The rate is unaffected -- that is the pacer's job, and it still paces at the
 // declared rate. This bounds only how much may be outstanding.
 func (b *BrutalSender) GetCongestionWindow() congestion.ByteCount {
-	// Below the transport's own timer granularity, the minimum round trip stops
-	// describing the path and starts describing the host's scheduler: quic-go
-	// paces on a one millisecond clock (MinPacingDelay, and TimerGranularity
-	// alongside it), so a sender on a 50us loopback still gets its turn at
-	// millisecond intervals and needs a millisecond of bytes outstanding to
-	// stay busy. Sizing in flight from the measured 50us instead starves it --
-	// measured on the bed, a 64 MB/s declaration over loopback fell to between
-	// 52% and 92% of the declared rate, run to run, with the floor binding.
-	rtt := max(b.minRTT(), congestion.MinPacingDelay)
+	rtt := b.windowRTT()
 	cwnd := congestion.ByteCount(float64(b.bps.Load()) * rtt.Seconds() * congestionWindowMultiplier)
 	// Loss compensation deliberately does not divide here, though it used to.
 	// The extra bytes compensation puts on the wire are the ones expected to be
@@ -291,12 +313,33 @@ func (b *BrutalSender) GetCongestionWindow() congestion.ByteCount {
 	// The absolute ceiling quic-go applies to each of its own controllers
 	// (protocol.MaxCongestionWindowPackets). Brutal was the only controller in
 	// the tree without one. It bounds the product of an outlandish declared
-	// rate and an outlandish round trip, which the minimum-RTT ceiling above
-	// cannot: that one is relative to the path.
+	// rate and an outlandish round trip, which the clamp above cannot: that one
+	// is relative to the path.
 	if ceiling := congestion.MaxCongestionWindowPackets * b.maxDatagramSize; cwnd > ceiling {
 		cwnd = ceiling
 	}
 	return cwnd
+}
+
+// windowRTT is the round trip GetCongestionWindow sizes from.
+func (b *BrutalSender) windowRTT() time.Duration {
+	rtt := b.rttStats.SmoothedRTT()
+	// A minimum of zero is not something quic-go's own RTTStats produces -- it
+	// seeds both figures at DefaultInitialRTT -- but a controller that divided
+	// its ceiling by nothing would be a worse failure than one that ignored the
+	// clamp for a moment, so the clamp is only applied where it means anything.
+	if minRTT := b.minRTT(); minRTT > 0 {
+		rtt = min(max(rtt, minRTT), cwndRTTClampK*minRTT)
+	}
+	// Below the transport's own timer granularity, the round trip stops
+	// describing the path and starts describing the host's scheduler: quic-go
+	// paces on a one millisecond clock (MinPacingDelay, and TimerGranularity
+	// alongside it), so a sender on a 50us loopback still gets its turn at
+	// millisecond intervals and needs a millisecond of bytes outstanding to
+	// stay busy. Sizing in flight from the measured 50us instead starves it --
+	// measured on the bed, a 64 MB/s declaration over loopback fell to between
+	// 52% and 92% of the declared rate, run to run, with the floor binding.
+	return max(rtt, congestion.MinPacingDelay)
 }
 
 // minRTT is the controller's estimate of the path's propagation delay.

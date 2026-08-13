@@ -114,86 +114,161 @@ func TestCwndCeiling(t *testing.T) {
 		b.GetCongestionWindow(), packets(b), congestion.MaxCongestionWindowPackets)
 }
 
-// TestCwndIgnoresQueueing is the change the standing-queue defect turns on: the
-// window must not be a function of how deep the queue has grown, or it licenses
-// the queue that produced it.
-func TestCwndIgnoresQueueing(t *testing.T) {
+// TestCwndBoundsQueueing is the change the standing-queue defect turns on. The
+// window may follow the queue -- it has to, because the controller cannot tell
+// a queue of its own making from a path whose delay went up, and refusing to
+// follow either cost 30% of the declared rate on a path that merely rerouted --
+// but it must stop following at cwndRTTClampK times the path minimum. Past that
+// point more queueing buys no more room to queue with, which is what breaks the
+// feedback loop; the unclamped version reached 26214 packets in flight.
+func TestCwndBoundsQueueing(t *testing.T) {
 	const declared = 10 << 20
 	const minRTT = 20 * time.Millisecond
 	rtt := newFakeRTT(minRTT, minRTT)
 	b := newSender(declared, false, rtt)
 
-	want := b.GetCongestionWindow()
-	t.Logf("declared %d B/s, minRTT %v: cwnd %d B (%.0f packets, %.1f x BDP)",
-		declared, minRTT, want, packets(b),
-		float64(want)/(float64(declared)*minRTT.Seconds()))
+	base := b.GetCongestionWindow()
+	want := congestion.ByteCount(cwndRTTClampK) * base // the ceiling the clamp sets
+	t.Logf("declared %d B/s, minRTT %v: cwnd %d B (%.0f packets, %.1f x BDP), clamped ceiling %d B",
+		declared, minRTT, base, packets(b),
+		float64(base)/(float64(declared)*minRTT.Seconds()), want)
 	for _, srtt := range []time.Duration{
 		minRTT, 25 * time.Millisecond, 50 * time.Millisecond, 200 * time.Millisecond,
 		800 * time.Millisecond, 1600 * time.Millisecond, 100 * minRTT,
 	} {
 		rtt.set(minRTT, srtt)
-		if got := b.GetCongestionWindow(); got != want {
-			t.Errorf("SRTT %v: cwnd %d, want %d -- the queue is still setting the window", srtt, got, want)
+		got := b.GetCongestionWindow()
+		if got > want {
+			t.Errorf("SRTT %v: cwnd %d, ceiling %d -- the queue is still setting the window", srtt, got, want)
+		}
+		// Everything at or past the clamp has to sit exactly on the ceiling: a
+		// window that kept creeping would be the same defect with a longer time
+		// constant.
+		if srtt >= cwndRTTClampK*minRTT && got != want {
+			t.Errorf("SRTT %v is past the clamp: cwnd %d, want the ceiling %d", srtt, got, want)
 		}
 	}
-	// And it does track the path itself, which is the part that must survive.
+	// Below the clamp it does track the smoothed round trip, which is what buys
+	// back the throughput on a path whose own delay rose.
+	rtt.set(minRTT, minRTT*3/2)
+	if got := b.GetCongestionWindow(); got <= base || got >= want {
+		t.Errorf("SRTT 1.5 x minRTT: cwnd %d, expected between %d and %d", got, base, want)
+	}
+	// And it tracks the path itself, which is the part that must survive.
 	rtt.set(200*time.Millisecond, 200*time.Millisecond)
 	if got := b.GetCongestionWindow(); got <= want {
 		t.Errorf("a genuinely longer path must raise the window: %d vs %d", got, want)
 	}
 }
 
-// TestPacketNumberLengthIsConstant is E7. On a client imitating Chrome the
-// congestion window decides the packet number length, which is bytes on the
-// wire that no amount of encryption hides. What the repair has to deliver is
-// that the length stops moving: a length that changes with the queue depth, or
-// changes when the path starts losing, is a signal. A length that is a constant
-// for a given declared rate is a static difference, and that one is accepted --
-// see docs/research/brutal.md section 3.7.
+// TestCwndSurvivesAPathDelayRise is the unit statement of the regression that
+// decided cwndRTTClampK, and the arithmetic behind the end-to-end cell in
+// tests/e2e (TestBrutalSurvivesAPathDelayRise).
 //
-// The sweep below holds the path's minimum round trip fixed, which is the whole
-// claim: for a given path, the length does not move. It does still change once
-// per connection, when quic-go's 100ms seed for the minimum is replaced by the
-// first real sample. That is not something a congestion controller can avoid
-// without knowing the path before measuring it.
-func TestPacketNumberLengthIsConstant(t *testing.T) {
+// A window of W bytes over a round trip of R caps the achievable rate at W/R
+// whatever the pacer is asked for, so a window that does not follow the round
+// trip is a rate that falls as the path lengthens. The path here is not
+// queueing -- it is longer, which is a different thing and one the controller
+// has no business punishing.
+func TestCwndSurvivesAPathDelayRise(t *testing.T) {
+	const declared = 1 << 20
+	const minRTT = 20 * time.Millisecond
+	// 2 x K: the window covers 2K x bps x minRTT, and delivering bps over R
+	// needs bps x R, so the sender is rate-bound out to this multiple.
+	const envelope = congestionWindowMultiplier * cwndRTTClampK
+	rtt := newFakeRTT(minRTT, minRTT)
+	b := newSender(declared, false, rtt)
+
+	t.Logf("declared %d B/s, path minimum %v, envelope %d x minRTT", declared, minRTT, envelope)
+	t.Logf("%-10s %-12s %-14s %-12s", "SRTT", "cwnd", "cwnd/SRTT", "vs declared")
+	for mult := 1; mult <= envelope+2; mult++ {
+		srtt := time.Duration(mult) * minRTT
+		rtt.set(minRTT, srtt)
+		cwnd := b.GetCongestionWindow()
+		rate := float64(cwnd) / srtt.Seconds()
+		t.Logf("%-10v %-12d %-14.0f %-12.3f", srtt, cwnd, rate, rate/declared)
+		// The tolerance is one byte of integer truncation in the window, not
+		// slack: at the envelope the two sides are the same number.
+		if mult <= envelope && rate < declared*0.999 {
+			t.Errorf("SRTT %v (%dx the path minimum, inside the %dx envelope): the window caps the sender at %.0f B/s, declared %d",
+				srtt, mult, envelope, rate, declared)
+		}
+	}
+}
+
+// TestPacketNumberLengthIsBounded is E7, and it is the criterion the K = 2
+// clamp deliberately gives ground on. On a client imitating Chrome the
+// congestion window decides the packet number length, which is bytes on the
+// wire that no amount of encryption hides. The unbounded window put an
+// open-ended trajectory there: the length climbed with the queue and could jump
+// the moment the path started losing. What is asserted now is what the clamp
+// can actually deliver:
+//
+//   - past cwndRTTClampK x minRTT the length is a constant, because the window
+//     is. That covers every standing queue a bottleneck can build, which is the
+//     regime the original trajectory lived in;
+//   - inside the clamp the window has a K-fold range, so the length may cross
+//     at most one of Chrome's thresholds -- one band of movement, bounded, and
+//     bounded by a constant that is in the source. At 1 MB/s over a 20ms path
+//     it does exactly that (33 packets at rest, 66 clamped, across the 64
+//     boundary), which is why this is asserted rather than claimed away;
+//   - it does not move with loss. A length change triggered by a lossy path is
+//     the worst shape this signal could take, and "compensation does not reach
+//     the window" is what keeps it out.
+//
+// The alternative was pinning the window to the lifetime minimum, which does
+// hold the length still and costs 30% of the declared rate on a path that
+// merely rerouted. See docs/research/brutal.md section 3.7.
+func TestPacketNumberLengthIsBounded(t *testing.T) {
 	const minRTT = 20 * time.Millisecond
 	rates := []uint64{
 		100 << 10, 400 << 10, 1 << 20, 2 << 20, 10 << 20, 100 << 20, 1 << 30,
 	}
+	// The bands, in the order the length grows through them, so that "at most
+	// one band of movement" is a subtraction rather than a case analysis.
+	band := map[int]int{1: 0, 2: 1, 4: 2}
 
-	t.Logf("%-16s %-10s %-10s", "declared B/s", "packets", "pn bytes")
+	t.Logf("%-16s %-12s %-12s %-10s %-10s", "declared B/s", "packets@min", "packets@clamp", "pn@min", "pn@clamp")
 	for _, bps := range rates {
 		rtt := newFakeRTT(minRTT, minRTT)
 		b := newSender(bps, false, rtt)
+		atRest := chromePNLen(packets(b))
+		restPackets := packets(b)
+		rtt.set(minRTT, cwndRTTClampK*minRTT)
 		want := chromePNLen(packets(b))
-		t.Logf("%-16d %-10.0f %-10d", bps, packets(b), want)
+		t.Logf("%-16d %-12.0f %-12.0f %-10d %-10d", bps, restPackets, packets(b), atRest, want)
 
-		// Across every queue depth the path could develop.
-		for mult := 1; mult <= 100; mult++ {
+		// One band at most between the two ends of the clamp's range.
+		if d := band[want] - band[atRest]; d < 0 || d > 1 {
+			t.Errorf("declared %d B/s: pn length %d at rest, %d at the clamp -- more than one band of movement",
+				bps, atRest, want)
+		}
+
+		// Past the clamp, across every queue depth the path could develop, it
+		// does not move at all.
+		for mult := cwndRTTClampK; mult <= 100; mult++ {
 			rtt.set(minRTT, time.Duration(mult)*minRTT)
 			if got := chromePNLen(packets(b)); got != want {
-				t.Errorf("declared %d B/s: pn length %d at SRTT %v x minRTT, %d at rest",
+				t.Errorf("declared %d B/s: pn length %d at SRTT %v x minRTT, %d at the clamp",
 					bps, got, mult, want)
 				break
 			}
 		}
 
 		// And after enough loss to clamp the ack rate, which used to move the
-		// window by 25% and could carry it across a threshold -- a length change
-		// triggered by loss is the worst shape this signal could take.
+		// window by 25% and could carry it across a threshold on its own.
 		rtt.set(minRTT, minRTT)
 		lossy := newSender(bps, false, rtt)
 		feedLoss(lossy, 6, 500, 0.30)
 		if lossy.ackRate == 1 {
 			t.Fatalf("declared %d B/s: expected the ack rate to be clamped, got 1", bps)
 		}
-		if got := chromePNLen(packets(lossy)); got != want {
-			t.Errorf("declared %d B/s: pn length %d under loss, %d without", bps, got, want)
+		if got := chromePNLen(packets(lossy)); got != atRest {
+			t.Errorf("declared %d B/s: pn length %d under loss, %d without", bps, got, atRest)
 		}
 		off := newSender(bps, true, rtt)
-		if got := chromePNLen(packets(off)); got != want {
-			t.Errorf("declared %d B/s: pn length %d with compensation off, %d with it on", bps, got, want)
+		if got := chromePNLen(packets(off)); got != atRest {
+			t.Errorf("declared %d B/s: pn length %d with compensation off, %d with it on", bps, got, atRest)
 		}
 	}
 }
@@ -289,16 +364,36 @@ func TestECNClosesTheGate(t *testing.T) {
 
 	// ECN arrives through the non-extended callback with a zero lost byte count.
 	b.OnCongestionEvent(1, 0, 0)
+	if b.pendingECNCE != 1 {
+		t.Fatalf("a CE report left %d marks pending, want 1", b.pendingECNCE)
+	}
 	feedLoss(b, 1, 500, 0.10)
+	if !b.congested {
+		t.Errorf("a CE mark should shut the delay gate on its own, with no queueing to infer from")
+	}
 	if b.ackRate != 1 {
 		t.Errorf("a CE mark should withdraw compensation: ackRate = %.3f", b.ackRate)
 	}
 
 	// Ordinary loss reaches the same callback with a real length, and must not
 	// be mistaken for a CE mark.
+	//
+	// The assertion is on the state, in the same event, and deliberately not on
+	// the ack rate afterwards. congested is latched, and on a path whose
+	// smoothed round trip equals its minimum the very next event unlatches it --
+	// so a sender that counted every loss as a CE mark still ends a six second
+	// feed with a compensating ack rate, and an assertion sited there sees
+	// nothing wrong. Removing the lostBytes test from OnCongestionEvent has to
+	// fail here.
 	c := newSender(2<<20, false, rtt)
 	c.OnCongestionEvent(1, 1200, 0)
-	feedLoss(c, 6, 500, 0.10)
+	if c.pendingECNCE != 0 {
+		t.Fatalf("an ordinary loss was recorded as %d pending CE marks", c.pendingECNCE)
+	}
+	feedLossFrom(c, 1, 1, 500, 0.10)
+	if c.congested {
+		t.Errorf("the delay gate shut on an unqueued path: a lost packet was read as a CE mark")
+	}
 	if c.ackRate >= 1 {
 		t.Errorf("a lost packet is not an ECN mark: ackRate = %.3f", c.ackRate)
 	}
@@ -508,16 +603,22 @@ func TestSetBPSConcurrent(t *testing.T) {
 // the window below the new path's bandwidth-delay product and keep the delay
 // gate permanently shut. The path layer says when that has happened.
 func TestOnPathChange(t *testing.T) {
+	// 8 MB/s rather than the 2 used elsewhere: at a 5ms round trip a smaller
+	// declaration lands on the 32 packet floor, and a window held up by the
+	// floor cannot show anything about the round trip it was sized from.
 	rtt := newFakeRTT(5*time.Millisecond, 5*time.Millisecond)
-	b := newSender(2<<20, false, rtt)
+	b := newSender(8<<20, false, rtt)
 	short := b.GetCongestionWindow()
 
 	// The path is replaced by a longer one. RTTStats keeps reporting the old
-	// minimum, because that is what a lifetime minimum does.
+	// minimum, because that is what a lifetime minimum does, and the clamp is
+	// relative to it -- so the window can open by cwndRTTClampK and no further,
+	// which on a 16x longer path is nowhere near enough.
 	rtt.set(5*time.Millisecond, 80*time.Millisecond)
 	b.OnCongestionEventEx(0, monotime.Time(time.Second), make([]congestion.AckedPacketInfo, 100), nil)
-	if got := b.GetCongestionWindow(); got != short {
-		t.Errorf("without being told, the window should still follow the stale minimum")
+	if got, ceiling := b.GetCongestionWindow(), congestion.ByteCount(cwndRTTClampK)*short; got != ceiling {
+		t.Errorf("without being told, the window should sit on the stale minimum's clamp: %d, want %d",
+			got, ceiling)
 	}
 	if !b.congested {
 		t.Errorf("without being told, a 16x round trip reads as a queue")
