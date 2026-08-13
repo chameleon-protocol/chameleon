@@ -36,6 +36,11 @@ func NewServerPuncher(ctx context.Context, conn *PunchPacketConn) (*ServerPunche
 // Respond runs the server side of a punch attempt. It sends hello packets,
 // acks inbound hellos, and returns as soon as it sees a valid punch packet.
 // If none arrive before timeout, it returns ErrPunchTimeout.
+//
+// Unlike Punch, it accepts any source by default: a peer behind a symmetric
+// NAT arrives from a port nobody can predict, and the peer is authenticated by
+// the QUIC handshake that follows anyway. Set PunchConfig.SourcePolicy to
+// restrict it.
 func (p *ServerPuncher) Respond(ctx context.Context, attemptID string, localAddrs, peerAddrs []netip.AddrPort, meta PunchMetadata, config PunchConfig) (PunchResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -46,10 +51,15 @@ func (p *ServerPuncher) Respond(ctx context.Context, attemptID string, localAddr
 	if _, _, err := decodePunchMetadata(meta); err != nil {
 		return PunchResult{}, err
 	}
+	policy, err := resolvePunchSourcePolicy(config.SourcePolicy, PunchSourceAny)
+	if err != nil {
+		return PunchResult{}, err
+	}
 	candidates := candidatePunchAddrs(localAddrs, peerAddrs, effectiveFamily(config.Family, p.conn.LocalAddr()))
 	if len(candidates) == 0 {
 		return PunchResult{}, fmt.Errorf("%w: no compatible peer addresses", ErrInvalidPunchConfig)
 	}
+	sources := newPunchSourceFilter(candidates, policy)
 	timeout := config.Timeout
 	if timeout == 0 {
 		timeout = defaultPunchTimeout
@@ -88,6 +98,9 @@ func (p *ServerPuncher) Respond(ctx context.Context, attemptID string, localAddr
 		case <-ticker.C:
 			sendPunchPackets(p.conn, candidates, meta, PunchPacketHello)
 		case ev := <-events:
+			if !sources.allows(ev.From) {
+				continue
+			}
 			if ev.Packet.Type == PunchPacketHello {
 				sendPunchPacket(p.conn, ev.From, meta, PunchPacketAck)
 			}
