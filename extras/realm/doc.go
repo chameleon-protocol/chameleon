@@ -87,6 +87,23 @@
 // the QUIC handshake. Nothing in this package authenticates a peer, and callers
 // must not treat a completed punch as proof of identity.
 //
+// # Announcing local addresses
+//
+// Peers announce their own interface addresses (LocalCandidates) alongside the
+// reflexive ones, because two peers on the same LAN otherwise have to reach
+// each other by NAT hairpin, which many gateways do not implement. This widens
+// what the rendezvous server learns: it now sees the announcer's internal
+// topology, not just its public address. That is a disclosure to an entity
+// already trusted with the peer's reflexive address and its communication
+// graph, and it buys the case the rendezvous server cannot help with at all —
+// a direct LAN path that never leaves the link.
+//
+// It also has a security-relevant upside. The initiator only accepts punch
+// packets from sources in its candidate set, so an incomplete candidate set is
+// not merely a missed path: a peer that punches from an address it never
+// announced has its packets dropped. Enumerating local addresses is what keeps
+// that filter from rejecting the legitimate same-LAN peer.
+//
 // # Initiator and responder differ on purpose
 //
 // The initiator (Punch, run by the client) accepts punch packets only from its

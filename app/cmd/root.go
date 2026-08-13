@@ -50,7 +50,10 @@ var (
 )
 
 var (
-	logger       *zap.Logger
+	// Nop until initLogger replaces it, so that code reachable before command
+	// startup (in practice: unit tests that drive one runtime in isolation)
+	// does not have to nil-check every log call.
+	logger       = zap.NewNop()
 	defaultViper *viper.Viper
 )
 

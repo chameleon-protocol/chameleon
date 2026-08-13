@@ -801,6 +801,7 @@ func (c *clientConfig) realmConfig(addr *realm.Addr) (*client.Config, error) {
 	if mapper != nil {
 		localAddrs = mergeMappedAddr(localAddrs, mapper.ExternalAddr())
 	}
+	localAddrs = withLocalCandidates(addr.RealmID, localPort(baseConn.LocalAddr()), family, localAddrs)
 	meta, err := realm.NewPunchMetadata()
 	if err != nil {
 		return nil, configError{Field: "realm", Err: err}
@@ -1336,6 +1337,39 @@ func (f *singleUseConnFactory) New(net.Addr) (net.PacketConn, error) {
 	}
 	f.used = true
 	return f.Open()
+}
+
+// withLocalCandidates prepends the host's own interface addresses to the
+// reflexive ones. Two peers on the same LAN otherwise only know each other by
+// the addresses STUN reflected, and reaching those from inside the NAT
+// requires hairpin translation that many home routers simply do not do.
+//
+// Enumeration is best effort: a host we cannot enumerate is still reachable
+// the way it was before, so failure is logged and the reflexive set is used
+// as is. Both ends also have to announce their local addresses for this to
+// help, because the initiator only accepts punch packets from sources in the
+// candidate set it was given (see extras/realm/doc.go); an address that was
+// never announced is dropped even when it arrives.
+func withLocalCandidates(realmID string, port uint16, family realm.AddrFamily, reflexive []netip.AddrPort) []netip.AddrPort {
+	local, err := realm.LocalCandidates(port, family)
+	if err != nil {
+		logger.Warn("realm local address enumeration failed",
+			zap.String("realm", realmID), zap.Error(err))
+		return reflexive
+	}
+	merged := realm.MergeCandidates(local, reflexive)
+	logger.Debug("realm local candidates gathered",
+		zap.String("realm", realmID),
+		zap.Strings("local", addrPortStrings(local)))
+	return merged
+}
+
+func localPort(addr net.Addr) uint16 {
+	udpAddr, ok := addr.(*net.UDPAddr)
+	if !ok || udpAddr.Port <= 0 || udpAddr.Port > 65535 {
+		return 0
+	}
+	return uint16(udpAddr.Port)
 }
 
 func addrPortStrings(addrs []netip.AddrPort) []string {
