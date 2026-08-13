@@ -55,19 +55,43 @@ func (f *fakeRTT) provider() congestion.RTTStatsProvider { return f }
 // would measure the initial burst rather than the steady state.
 const simBase = monotime.Time(time.Hour)
 
+// nextTestPN hands out distinct packet numbers across everything fed to a
+// sender in this package. It has to: the sender remembers which numbers it
+// counted as lost so that a later acknowledgement of one can take the count
+// back, so a helper that left every packet at number zero would be describing a
+// path on which every loss is immediately contradicted.
+var nextTestPN congestion.PacketNumber
+
+func numbered[T any](n int, set func(*T, congestion.PacketNumber)) []T {
+	s := make([]T, n)
+	for i := range s {
+		nextTestPN++
+		set(&s[i], nextTestPN)
+	}
+	return s
+}
+
 // feedLoss drives sec seconds of congestion events at the given packet rate and
 // loss fraction, one event per second, and leaves the sender with the ackRate
 // that window produced. It returns the loss fraction actually fed, which at low
 // packet rates differs from the one asked for: a rate of 10 packets/s cannot
 // carry 5% loss without rounding.
 func feedLoss(b *BrutalSender, sec int, packetsPerSec int, loss float64) float64 {
+	return feedLossFrom(b, 1, sec, packetsPerSec, loss)
+}
+
+// feedLossFrom is feedLoss starting at a given second. Feeding the same sender
+// twice from second one would land in the slots the first call already filled
+// and add to them rather than replace them, so anything measuring how the
+// sender responds to a change of conditions has to advance the clock itself.
+func feedLossFrom(b *BrutalSender, start, sec int, packetsPerSec int, loss float64) float64 {
 	lost := int(math.Round(float64(packetsPerSec) * loss))
 	acked := packetsPerSec - lost
-	for s := 1; s <= sec; s++ {
+	for s := start; s < start+sec; s++ {
 		b.OnCongestionEventEx(0,
 			monotime.Time(time.Duration(s)*time.Second),
-			make([]congestion.AckedPacketInfo, acked),
-			make([]congestion.LostPacketInfo, lost))
+			numbered(acked, func(p *congestion.AckedPacketInfo, pn congestion.PacketNumber) { p.PacketNumber = pn }),
+			numbered(lost, func(p *congestion.LostPacketInfo, pn congestion.PacketNumber) { p.PacketNumber = pn }))
 	}
 	return float64(lost) / float64(packetsPerSec)
 }

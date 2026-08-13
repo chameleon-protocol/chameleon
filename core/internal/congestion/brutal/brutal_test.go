@@ -10,8 +10,16 @@ import (
 
 // feedAckRate drives a single sampling slot with the given number of acked and
 // lost packets and returns the resulting ackRate.
+//
+// The RTT source has to be installed because the ack rate now depends on it:
+// loss is only compensated for when the path is not queueing. An unqueued path
+// -- smoothed round trip equal to the minimum -- is what this test wants, so
+// that what it measures is the loss ratio and nothing else. Production always
+// installs the provider inside the lock that installs the controller, before
+// the connection can call anything, so a nil provider is not a reachable state.
 func feedAckRate(disableLossCompensation bool, ackCount, lossCount int) float64 {
 	b := NewBrutalSender(1000000, disableLossCompensation)
+	b.SetRTTStatsProvider(newFakeRTT(20*time.Millisecond, 20*time.Millisecond).provider())
 	acked := make([]congestion.AckedPacketInfo, ackCount)
 	lost := make([]congestion.LostPacketInfo, lossCount)
 	// eventTime lands in a fixed slot; a single event carries enough samples.

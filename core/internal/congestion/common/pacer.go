@@ -8,8 +8,24 @@ import (
 )
 
 const (
-	maxBurstPackets               = 10
-	maxBurstPacingDelayMultiplier = 4
+	// maxBurstPackets is quic-go's own figure (internal/congestion/pacer.go).
+	// Keeping it is a fingerprint decision, not a performance one: the shape of
+	// the first burst after an idle period is visible, and matching upstream is
+	// the point.
+	maxBurstPackets = 10
+
+	// maxBurstPacingDelayMultiplier sizes the other half of the burst cap, the
+	// one that binds at any rate above a few MB/s. Upstream quic-go accumulates
+	// MinPacingDelay + TimerGranularity of bandwidth, which is 1ms + 1ms; this
+	// tree had four, which doubled the burst against upstream for no stated
+	// reason. Two restores it. TimerGranularity is not exported through the
+	// congestion package, but is the same one millisecond
+	// (quic-go internal/protocol/params.go: MinPacingDelay, TimerGranularity).
+	//
+	// Steady-state throughput does not depend on this -- budget only
+	// accumulates while idle -- so what it changes is how blocky the injection
+	// is after a pause, which is what a shared bottleneck's buffer sees.
+	maxBurstPacingDelayMultiplier = 2
 )
 
 // Pacer implements a token bucket pacing algorithm.
@@ -77,4 +93,22 @@ func (p *Pacer) TimeUntilSend() monotime.Time {
 
 func (p *Pacer) SetMaxDatagramSize(s congestion.ByteCount) {
 	p.maxDatagramSize = s
+}
+
+// Reset drops the budget accumulated so far, so that the next send is paced at
+// the current bandwidth rather than partly funded by the previous one. A
+// controller whose rate can be changed mid-connection needs this: without it,
+// dropping from 100 MB/s to 1 MB/s still releases several hundred kilobytes at
+// the old pace.
+//
+// Like every other method here it must be called from the connection's run
+// loop, and only from there. None of this struct's state is synchronised, on
+// purpose -- it is touched once per packet sent. A caller on some other
+// goroutine that wants a reset has to post the request and let the run loop
+// pick it up; see BrutalSender.SetBPS.
+//
+// lastSentTime is deliberately left alone. Zeroing it would read as "has never
+// sent" and hand out a full idle burst, which is the opposite of draining.
+func (p *Pacer) Reset() {
+	p.budgetAtLastSent = 0
 }
