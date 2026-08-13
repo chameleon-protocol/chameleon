@@ -89,6 +89,38 @@ func TestUDPMessage(t *testing.T) {
 	}
 }
 
+// TestUDPMessageSerializeTo makes sure that a message is serialized in full even
+// when it doesn't fit in the provided buffer - MaxUDPSize bounds the payload,
+// so a max-size payload plus its header always overflows a MaxUDPSize buffer.
+func TestUDPMessageSerializeTo(t *testing.T) {
+	buf := make([]byte, MaxUDPSize)
+	for _, dataLen := range []int{1, 4077, 4078, 4095, MaxUDPSize, MaxUDPSize + 1, 10000} {
+		data := make([]byte, dataLen)
+		for i := range data {
+			data[i] = byte(i)
+		}
+		m := &UDPMessage{
+			SessionID: 42,
+			PacketID:  1,
+			FragID:    0,
+			FragCount: 1,
+			Addr:      "example.com:9000",
+			Data:      data,
+		}
+		wire := m.SerializeTo(buf)
+		if len(wire) != m.Size() {
+			t.Fatalf("SerializeTo() len = %d, want %d (data %d)", len(wire), m.Size(), dataLen)
+		}
+		m2, err := ParseUDPMessage(wire)
+		if err != nil {
+			t.Fatalf("ParseUDPMessage() error = %v (data %d)", err, dataLen)
+		}
+		if !reflect.DeepEqual(m2, m) {
+			t.Errorf("round trip mismatch (data %d)", dataLen)
+		}
+	}
+}
+
 // TestUDPMessageMalformed is to make sure ParseUDPMessage() fails (but not panic) on malformed data.
 func TestUDPMessageMalformed(t *testing.T) {
 	tests := []struct {

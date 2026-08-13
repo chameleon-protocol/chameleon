@@ -11,6 +11,7 @@ import (
 	"github.com/chameleon-protocol/chameleon/core/v2/client"
 	coreErrs "github.com/chameleon-protocol/chameleon/core/v2/errors"
 	"github.com/chameleon-protocol/chameleon/core/v2/internal/integration_tests/mocks"
+	"github.com/chameleon-protocol/chameleon/core/v2/internal/protocol"
 	"github.com/chameleon-protocol/chameleon/core/v2/server"
 )
 
@@ -180,6 +181,58 @@ func TestClientServerUDPEcho(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, sData, rData)
 	assert.Equal(t, echoAddr, rAddr)
+}
+
+// TestClientServerUDPMaxSize tests UDP forwarding of payloads around MaxUDPSize,
+// which need fragmentation in both directions and used to be dropped silently
+// when the message header no longer fit next to the payload in the send buffer.
+func TestClientServerUDPMaxSize(t *testing.T) {
+	// Create server
+	udpConn, udpAddr, err := serverConn()
+	assert.NoError(t, err)
+	auth := mocks.NewMockAuthenticator(t)
+	auth.EXPECT().Authenticate(mock.Anything, mock.Anything, mock.Anything).Return(true, "nobody")
+	s, err := server.NewServer(&server.Config{
+		TLSConfig:     serverTLSConfig(),
+		Conn:          udpConn,
+		Authenticator: auth,
+	})
+	assert.NoError(t, err)
+	defer s.Close()
+	go s.Serve()
+
+	// Create UDP echo server
+	echoAddr := "127.0.0.1:22446"
+	echoConn, err := net.ListenPacket("udp", echoAddr)
+	assert.NoError(t, err)
+	echoServer := &udpEchoServer{Conn: echoConn}
+	defer echoServer.Close()
+	go echoServer.Serve()
+
+	// Create client
+	c, _, err := client.NewClient(&client.Config{
+		ServerAddr: udpAddr,
+		TLSConfig:  client.TLSConfig{InsecureSkipVerify: true},
+	})
+	assert.NoError(t, err)
+	defer c.Close()
+
+	conn, err := c.UDP()
+	assert.NoError(t, err)
+	defer conn.Close()
+
+	for _, size := range []int{4000, 4077, 4078, 4095, protocol.MaxUDPSize} {
+		sData := make([]byte, size)
+		for i := range sData {
+			sData[i] = byte(i)
+		}
+		err = conn.Send(sData, echoAddr)
+		assert.NoError(t, err)
+		rData, rAddr, err := conn.Receive()
+		assert.NoError(t, err)
+		assert.Equal(t, sData, rData, "size %d did not survive the round trip", size)
+		assert.Equal(t, echoAddr, rAddr)
+	}
 }
 
 // TestClientServerHandshakeInfo tests that the client returns the correct handshake info.

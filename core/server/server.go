@@ -393,12 +393,9 @@ func (io *udpIOImpl) SendMessage(buf []byte, msg *protocol.UDPMessage) error {
 			return errDisconnect
 		}
 	}
-	msgN := msg.Serialize(buf)
-	if msgN < 0 {
-		// Message larger than buffer, silent drop
-		return nil
-	}
-	return io.Conn.SendDatagram(buf[:msgN])
+	// Oversized messages must still reach SendDatagram, as it's the
+	// DatagramTooLargeError from there that triggers fragmentation.
+	return io.Conn.SendDatagram(msg.SerializeTo(buf))
 }
 
 func (io *udpIOImpl) Hook(data []byte, reqAddr *string) error {

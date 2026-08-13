@@ -190,6 +190,18 @@ func (m *UDPMessage) Serialize(buf []byte) int {
 	return 8 + i
 }
 
+// SerializeTo serializes the message into buf and returns the serialized
+// message. buf is only a hint: messages that don't fit (MaxUDPSize only bounds
+// the payload, not the header on top of it) are serialized into a new buffer
+// instead of being dropped.
+func (m *UDPMessage) SerializeTo(buf []byte) []byte {
+	if n := m.Serialize(buf); n >= 0 {
+		return buf[:n]
+	}
+	buf = make([]byte, m.Size())
+	return buf[:m.Serialize(buf)]
+}
+
 func ParseUDPMessage(msg []byte) (*UDPMessage, error) {
 	m := &UDPMessage{}
 	buf := bytes.NewBuffer(msg)
