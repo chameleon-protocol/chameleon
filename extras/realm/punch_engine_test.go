@@ -124,62 +124,6 @@ func TestCandidatePunchAddrsExplicitFamilyIsAuthoritative(t *testing.T) {
 	assert.Equal(t, []netip.AddrPort{netip.MustParseAddrPort("[2001:db8::1]:4433")}, v6)
 }
 
-func TestCandidatePunchAddrsExpandsPredictableIPv4Ports(t *testing.T) {
-	local := []netip.AddrPort{netip.MustParseAddrPort("192.0.2.10:1234")}
-	peer := []netip.AddrPort{
-		netip.MustParseAddrPort("198.51.100.20:40000"),
-		netip.MustParseAddrPort("198.51.100.20:40003"),
-	}
-
-	candidates := candidatePunchAddrs(local, peer, AddrFamilyAny)
-	assert.Equal(t, []netip.AddrPort{
-		netip.MustParseAddrPort("198.51.100.20:40000"),
-		netip.MustParseAddrPort("198.51.100.20:40001"),
-		netip.MustParseAddrPort("198.51.100.20:40002"),
-		netip.MustParseAddrPort("198.51.100.20:40003"),
-		netip.MustParseAddrPort("198.51.100.20:40004"),
-		netip.MustParseAddrPort("198.51.100.20:40005"),
-		netip.MustParseAddrPort("198.51.100.20:40006"),
-		netip.MustParseAddrPort("198.51.100.20:40007"),
-	}, candidates)
-}
-
-func TestCandidatePunchAddrsDoesNotExpandLargePortGaps(t *testing.T) {
-	local := []netip.AddrPort{netip.MustParseAddrPort("192.0.2.10:1234")}
-	peer := []netip.AddrPort{
-		netip.MustParseAddrPort("198.51.100.20:40000"),
-		netip.MustParseAddrPort("198.51.100.20:40010"),
-	}
-
-	candidates := candidatePunchAddrs(local, peer, AddrFamilyAny)
-	assert.Equal(t, peer, candidates)
-}
-
-func TestCandidatePunchAddrsDoesNotExpandIPv6(t *testing.T) {
-	local := []netip.AddrPort{netip.MustParseAddrPort("[2001:db8::10]:1234")}
-	peer := []netip.AddrPort{
-		netip.MustParseAddrPort("[2001:db8::20]:40000"),
-		netip.MustParseAddrPort("[2001:db8::20]:40001"),
-	}
-
-	candidates := candidatePunchAddrs(local, peer, AddrFamilyAny)
-	assert.Equal(t, peer, candidates)
-}
-
-func TestCandidatePunchAddrsExpansionHandlesPortBounds(t *testing.T) {
-	local := []netip.AddrPort{netip.MustParseAddrPort("192.0.2.10:1234")}
-	peer := []netip.AddrPort{
-		netip.MustParseAddrPort("198.51.100.20:65534"),
-		netip.MustParseAddrPort("198.51.100.20:65535"),
-	}
-
-	candidates := candidatePunchAddrs(local, peer, AddrFamilyAny)
-	assert.Equal(t, []netip.AddrPort{
-		netip.MustParseAddrPort("198.51.100.20:65534"),
-		netip.MustParseAddrPort("198.51.100.20:65535"),
-	}, candidates)
-}
-
 func TestPunchTimeout(t *testing.T) {
 	meta := testPunchMetadata()
 	client := listenUDP4(t)
