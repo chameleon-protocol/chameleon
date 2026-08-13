@@ -66,8 +66,8 @@ func ReadTCPRequest(r io.Reader) (string, error) {
 	return string(addrBuf), nil
 }
 
-func WriteTCPRequest(w io.Writer, addr string) error {
-	padding := tcpRequestPadding.String()
+func WriteTCPRequest(w io.Writer, addr string, ps *PaddingScheme) error {
+	padding := ps.orDefault().TCPRequest.generate()
 	paddingLen := len(padding)
 	addrLen := len(addr)
 	sz := int(quicvarint.Len(FrameTypeTCPRequest)) +
@@ -128,8 +128,8 @@ func ReadTCPResponse(r io.Reader) (bool, string, error) {
 	return status[0] == 0, string(msgBuf), nil
 }
 
-func WriteTCPResponse(w io.Writer, ok bool, msg string) error {
-	padding := tcpResponsePadding.String()
+func WriteTCPResponse(w io.Writer, ok bool, msg string, ps *PaddingScheme) error {
+	padding := ps.orDefault().TCPResponse.generate()
 	paddingLen := len(padding)
 	msgLen := len(msg)
 	sz := 1 + int(quicvarint.Len(uint64(msgLen))) + msgLen +

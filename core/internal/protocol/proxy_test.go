@@ -233,7 +233,7 @@ func TestWriteTCPRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			w := &bytes.Buffer{}
-			err := WriteTCPRequest(w, tt.addr)
+			err := WriteTCPRequest(w, tt.addr, nil)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("WriteTCPRequest() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -336,7 +336,7 @@ func TestWriteTCPResponse(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			w := &bytes.Buffer{}
-			err := WriteTCPResponse(w, tt.args.ok, tt.args.msg)
+			err := WriteTCPResponse(w, tt.args.ok, tt.args.msg, nil)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("WriteTCPResponse() error = %v, wantErr %v", err, tt.wantErr)
 				return

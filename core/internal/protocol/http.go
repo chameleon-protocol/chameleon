@@ -53,10 +53,10 @@ func AuthRequestFromHeader(h http.Header) AuthRequest {
 	}
 }
 
-func AuthRequestToHeader(h http.Header, req AuthRequest) {
+func AuthRequestToHeader(h http.Header, req AuthRequest, ps *PaddingScheme) {
 	h.Set(RequestHeaderAuth, req.Auth)
 	h.Set(CommonHeaderCCRX, strconv.FormatUint(req.Rx, 10))
-	h.Set(CommonHeaderPadding, authRequestPadding.String())
+	h.Set(CommonHeaderPadding, ps.orDefault().AuthRequest.generate())
 }
 
 func AuthResponseFromHeader(h http.Header) AuthResponse {
@@ -72,12 +72,12 @@ func AuthResponseFromHeader(h http.Header) AuthResponse {
 	return resp
 }
 
-func AuthResponseToHeader(h http.Header, resp AuthResponse) {
+func AuthResponseToHeader(h http.Header, resp AuthResponse, ps *PaddingScheme) {
 	h.Set(ResponseHeaderUDPEnabled, strconv.FormatBool(resp.UDPEnabled))
 	if resp.RxAuto {
 		h.Set(CommonHeaderCCRX, "auto")
 	} else {
 		h.Set(CommonHeaderCCRX, strconv.FormatUint(resp.Rx, 10))
 	}
-	h.Set(CommonHeaderPadding, authResponsePadding.String())
+	h.Set(CommonHeaderPadding, ps.orDefault().AuthResponse.generate())
 }

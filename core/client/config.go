@@ -27,6 +27,11 @@ type Config struct {
 	CongestionConfig CongestionConfig
 	BandwidthConfig  BandwidthConfig
 	FastOpen         bool
+	// PaddingSeed, when set, derives the length distribution of the protocol's
+	// padding fields from it, instead of using the ranges that are hardcoded in
+	// (and therefore shared by) every deployment. Callers are expected to derive
+	// it from a deployment secret, e.g. the obfuscation password.
+	PaddingSeed []byte
 
 	filled bool // whether the fields have been verified and filled
 }

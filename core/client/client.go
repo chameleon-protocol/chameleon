@@ -47,7 +47,8 @@ func NewClient(config *Config) (Client, *HandshakeInfo, error) {
 		return nil, nil, err
 	}
 	c := &clientImpl{
-		config: config,
+		config:  config,
+		padding: protocol.NewPaddingScheme(config.PaddingSeed),
 	}
 	info, err := c.connect()
 	if err != nil {
@@ -57,7 +58,8 @@ func NewClient(config *Config) (Client, *HandshakeInfo, error) {
 }
 
 type clientImpl struct {
-	config *Config
+	config  *Config
+	padding *protocol.PaddingScheme
 
 	pktConn net.PacketConn
 	tr      *quic.Transport
@@ -128,7 +130,7 @@ func (c *clientImpl) connect() (*HandshakeInfo, error) {
 	protocol.AuthRequestToHeader(req.Header, protocol.AuthRequest{
 		Auth: c.config.Auth,
 		Rx:   c.config.BandwidthConfig.MaxRx,
-	})
+	}, c.padding)
 	resp, err := rt.RoundTrip(req)
 	if err != nil {
 		if conn != nil {
@@ -199,7 +201,7 @@ func (c *clientImpl) TCP(addr string) (net.Conn, error) {
 		return nil, wrapIfConnectionClosed(err)
 	}
 	// Send request
-	err = protocol.WriteTCPRequest(stream, addr)
+	err = protocol.WriteTCPRequest(stream, addr, c.padding)
 	if err != nil {
 		_ = stream.Close()
 		return nil, wrapIfConnectionClosed(err)

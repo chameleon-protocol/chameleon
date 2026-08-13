@@ -89,6 +89,7 @@ func NewServer(config *Config) (Server, error) {
 		config:   config,
 		tr:       tr,
 		listener: listener,
+		padding:  protocol.NewPaddingScheme(config.PaddingSeed),
 	}, nil
 }
 
@@ -96,6 +97,7 @@ type serverImpl struct {
 	config   *Config
 	tr       *quic.Transport
 	listener *quic.Listener
+	padding  *protocol.PaddingScheme
 }
 
 func (s *serverImpl) Serve() error {
@@ -117,7 +119,7 @@ func (s *serverImpl) Close() error {
 }
 
 func (s *serverImpl) handleClient(conn *quic.Conn) {
-	handler := newH3sHandler(s.config, conn)
+	handler := newH3sHandler(s.config, s.padding, conn)
 	h3s := http3.Server{
 		Handler:          handler,
 		StreamDispatcher: handler.ProxyStreamHijacker,
@@ -136,8 +138,9 @@ func (s *serverImpl) handleClient(conn *quic.Conn) {
 }
 
 type h3sHandler struct {
-	config *Config
-	conn   *quic.Conn
+	config  *Config
+	padding *protocol.PaddingScheme
+	conn    *quic.Conn
 
 	authenticated bool
 	authMutex     sync.Mutex
@@ -147,11 +150,12 @@ type h3sHandler struct {
 	udpSM *udpSessionManager // Only set after authentication
 }
 
-func newH3sHandler(config *Config, conn *quic.Conn) *h3sHandler {
+func newH3sHandler(config *Config, padding *protocol.PaddingScheme, conn *quic.Conn) *h3sHandler {
 	return &h3sHandler{
-		config: config,
-		conn:   conn,
-		connID: rand.Uint32(),
+		config:  config,
+		padding: padding,
+		conn:    conn,
+		connID:  rand.Uint32(),
 	}
 }
 
@@ -165,7 +169,7 @@ func (h *h3sHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				UDPEnabled: !h.config.DisableUDP,
 				Rx:         h.config.BandwidthConfig.MaxRx,
 				RxAuto:     h.config.IgnoreClientBandwidth,
-			})
+			}, h.padding)
 			w.WriteHeader(protocol.StatusAuthOK)
 			return
 		}
@@ -199,7 +203,7 @@ func (h *h3sHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				UDPEnabled: !h.config.DisableUDP,
 				Rx:         h.config.BandwidthConfig.MaxRx,
 				RxAuto:     h.config.IgnoreClientBandwidth,
-			})
+			}, h.padding)
 			w.WriteHeader(protocol.StatusAuthOK)
 			// Call event logger
 			if tl := h.config.TrafficLogger; tl != nil {
@@ -287,7 +291,7 @@ func (h *h3sHandler) handleTCPRequest(stream *utils.QStream) {
 		// This is essentially a server-side fast-open.
 		if hooked {
 			streamStats.State.Store(StreamStateHooking)
-			_ = protocol.WriteTCPResponse(stream, true, "RequestHook enabled")
+			_ = protocol.WriteTCPResponse(stream, true, "RequestHook enabled", h.padding)
 			putback, err = h.config.RequestHook.TCP(stream, &reqAddr)
 			if err != nil {
 				_ = stream.Close()
@@ -305,7 +309,7 @@ func (h *h3sHandler) handleTCPRequest(stream *utils.QStream) {
 	tConn, err := h.config.Outbound.TCP(reqAddr)
 	if err != nil {
 		if !hooked {
-			_ = protocol.WriteTCPResponse(stream, false, err.Error())
+			_ = protocol.WriteTCPResponse(stream, false, err.Error(), h.padding)
 		}
 		_ = stream.Close()
 		// Log the error
@@ -315,7 +319,7 @@ func (h *h3sHandler) handleTCPRequest(stream *utils.QStream) {
 		return
 	}
 	if !hooked {
-		_ = protocol.WriteTCPResponse(stream, true, "Connected")
+		_ = protocol.WriteTCPResponse(stream, true, "Connected", h.padding)
 	}
 	streamStats.State.Store(StreamStateEstablished)
 	// Put back the data if the hook requested

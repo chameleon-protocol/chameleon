@@ -80,7 +80,7 @@ func TestServerMasquerade(t *testing.T) {
 	tcpStream, err := conn.OpenStream()
 	assert.NoError(t, err)
 	defer tcpStream.Close()
-	err = protocol.WriteTCPRequest(tcpStream, "www.google.com:443")
+	err = protocol.WriteTCPRequest(tcpStream, "www.google.com:443", nil)
 	assert.NoError(t, err)
 
 	// We should receive nothing
