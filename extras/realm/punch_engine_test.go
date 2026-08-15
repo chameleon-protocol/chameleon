@@ -29,14 +29,14 @@ func TestPunchBetweenTwoPeers(t *testing.T) {
 	aDone := make(chan result, 1)
 	bDone := make(chan result, 1)
 	go func() {
-		r, err := Punch(context.Background(), a, []netip.AddrPort{aAddr}, []netip.AddrPort{bAddr}, meta, PunchConfig{
+		r, err := Punch(context.Background(), a, testMask, []netip.AddrPort{aAddr}, []netip.AddrPort{bAddr}, meta, PunchConfig{
 			Timeout:  time.Second,
 			Interval: 10 * time.Millisecond,
 		})
 		aDone <- result{r: r, err: err}
 	}()
 	go func() {
-		r, err := Punch(context.Background(), b, []netip.AddrPort{bAddr}, []netip.AddrPort{aAddr}, meta, PunchConfig{
+		r, err := Punch(context.Background(), b, testMask, []netip.AddrPort{bAddr}, []netip.AddrPort{aAddr}, meta, PunchConfig{
 			Timeout:  time.Second,
 			Interval: 10 * time.Millisecond,
 		})
@@ -72,18 +72,18 @@ func TestPunchReturnsOnAck(t *testing.T) {
 		if err != nil {
 			return
 		}
-		packet, err := DecodePunchPacket(buf[:n], meta)
+		packet, err := DecodePunchPacket(buf[:n], meta, testMask)
 		if err != nil || packet.Type != PunchPacketHello {
 			return
 		}
-		ack, err := EncodePunchPacket(PunchPacketAck, meta)
+		ack, err := EncodePunchPacket(PunchPacketAck, meta, testMask)
 		if err != nil {
 			return
 		}
 		_, _ = peer.WriteTo(ack, addr)
 	}()
 
-	result, err := Punch(context.Background(), client, []netip.AddrPort{clientAddr}, []netip.AddrPort{peerAddr}, meta, PunchConfig{
+	result, err := Punch(context.Background(), client, testMask, []netip.AddrPort{clientAddr}, []netip.AddrPort{peerAddr}, meta, PunchConfig{
 		Timeout:  time.Second,
 		Interval: 10 * time.Millisecond,
 	})
@@ -134,7 +134,7 @@ func TestPunchTimeout(t *testing.T) {
 	clientAddr := packetConnAddrPort(t, client)
 	peerAddr := packetConnAddrPort(t, peer)
 
-	_, err := Punch(context.Background(), client, []netip.AddrPort{clientAddr}, []netip.AddrPort{peerAddr}, meta, PunchConfig{
+	_, err := Punch(context.Background(), client, testMask, []netip.AddrPort{clientAddr}, []netip.AddrPort{peerAddr}, meta, PunchConfig{
 		Timeout:  50 * time.Millisecond,
 		Interval: 10 * time.Millisecond,
 	})
@@ -148,7 +148,7 @@ func TestPunchRejectsBadMetadata(t *testing.T) {
 	peer := listenUDP4(t)
 	defer peer.Close()
 
-	_, err := Punch(context.Background(), client, []netip.AddrPort{packetConnAddrPort(t, client)}, []netip.AddrPort{packetConnAddrPort(t, peer)}, PunchMetadata{
+	_, err := Punch(context.Background(), client, testMask, []netip.AddrPort{packetConnAddrPort(t, client)}, []netip.AddrPort{packetConnAddrPort(t, peer)}, PunchMetadata{
 		Nonce: "not-hex",
 		Obfs:  testPunchMetadata().Obfs,
 	}, PunchConfig{})
@@ -171,14 +171,14 @@ func TestPunchIgnoresWrongMetadata(t *testing.T) {
 	}
 
 	go func() {
-		packet, err := EncodePunchPacket(PunchPacketAck, wrongMeta)
+		packet, err := EncodePunchPacket(PunchPacketAck, wrongMeta, testMask)
 		if err != nil {
 			return
 		}
 		_, _ = peer.WriteTo(packet, udpAddrFromAddrPort(clientAddr))
 	}()
 
-	_, err := Punch(context.Background(), client, []netip.AddrPort{clientAddr}, []netip.AddrPort{peerAddr}, meta, PunchConfig{
+	_, err := Punch(context.Background(), client, testMask, []netip.AddrPort{clientAddr}, []netip.AddrPort{peerAddr}, meta, PunchConfig{
 		Timeout:  50 * time.Millisecond,
 		Interval: 10 * time.Millisecond,
 	})

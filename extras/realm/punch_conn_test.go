@@ -21,7 +21,7 @@ func TestPunchPacketConnPassesThroughNonPunchPackets(t *testing.T) {
 	peer := listenUDP4(t)
 	defer peer.Close()
 
-	wrapped, err := NewPunchPacketConn(server, 1)
+	wrapped, err := NewPunchPacketConn(server, testMask, 1)
 	require.NoError(t, err)
 
 	payload := []byte("not a punch packet")
@@ -42,12 +42,12 @@ func TestPunchPacketConnInterceptsRegisteredPunchPackets(t *testing.T) {
 	peer := listenUDP4(t)
 	defer peer.Close()
 
-	wrapped, err := NewPunchPacketConn(server, 1)
+	wrapped, err := NewPunchPacketConn(server, testMask, 1)
 	require.NoError(t, err)
 	events, err := wrapped.AddPunchAttempt("attempt-1", meta)
 	require.NoError(t, err)
 
-	punchPacket, err := EncodePunchPacket(PunchPacketHello, meta)
+	punchPacket, err := EncodePunchPacket(PunchPacketHello, meta, testMask)
 	require.NoError(t, err)
 	_, err = peer.WriteTo(punchPacket, server.LocalAddr())
 	require.NoError(t, err)
@@ -78,13 +78,13 @@ func TestPunchPacketConnRemovePunchAttempt(t *testing.T) {
 	peer := listenUDP4(t)
 	defer peer.Close()
 
-	wrapped, err := NewPunchPacketConn(server, 1)
+	wrapped, err := NewPunchPacketConn(server, testMask, 1)
 	require.NoError(t, err)
 	events, err := wrapped.AddPunchAttempt("attempt-1", meta)
 	require.NoError(t, err)
 	wrapped.RemovePunchAttempt("attempt-1")
 
-	punchPacket, err := EncodePunchPacket(PunchPacketAck, meta)
+	punchPacket, err := EncodePunchPacket(PunchPacketAck, meta, testMask)
 	require.NoError(t, err)
 	_, err = peer.WriteTo(punchPacket, server.LocalAddr())
 	require.NoError(t, err)
@@ -105,7 +105,7 @@ func TestPunchPacketConnRejectsBadAttempts(t *testing.T) {
 	server := listenUDP4(t)
 	defer server.Close()
 
-	wrapped, err := NewPunchPacketConn(server, 1)
+	wrapped, err := NewPunchPacketConn(server, testMask, 1)
 	require.NoError(t, err)
 
 	_, err = wrapped.AddPunchAttempt("", testPunchMetadata())
@@ -128,7 +128,7 @@ func TestPunchPacketConnRejectsBadAttempts(t *testing.T) {
 
 func TestPunchPacketConnCloseClosesUnderlyingConn(t *testing.T) {
 	server := listenUDP4(t)
-	wrapped, err := NewPunchPacketConn(server, 1)
+	wrapped, err := NewPunchPacketConn(server, testMask, 1)
 	require.NoError(t, err)
 
 	require.NoError(t, wrapped.Close())
@@ -137,7 +137,7 @@ func TestPunchPacketConnCloseClosesUnderlyingConn(t *testing.T) {
 }
 
 func TestNewPunchPacketConnRejectsNilConn(t *testing.T) {
-	_, err := NewPunchPacketConn(nil, 1)
+	_, err := NewPunchPacketConn(nil, testMask, 1)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrInvalidPunchAttempt), "got %v", err)
 }
@@ -149,12 +149,12 @@ func TestPunchPacketConnDoesNotExposePunchBytesToReader(t *testing.T) {
 	peer := listenUDP4(t)
 	defer peer.Close()
 
-	wrapped, err := NewPunchPacketConn(server, 1)
+	wrapped, err := NewPunchPacketConn(server, testMask, 1)
 	require.NoError(t, err)
 	_, err = wrapped.AddPunchAttempt("attempt-1", meta)
 	require.NoError(t, err)
 
-	punchPacket, err := EncodePunchPacket(PunchPacketHello, meta)
+	punchPacket, err := EncodePunchPacket(PunchPacketHello, meta, testMask)
 	require.NoError(t, err)
 	_, err = peer.WriteTo(punchPacket, server.LocalAddr())
 	require.NoError(t, err)
@@ -176,7 +176,7 @@ func TestPunchPacketConnInterceptsSTUNPackets(t *testing.T) {
 	peer := listenUDP4(t)
 	defer peer.Close()
 
-	wrapped, err := NewPunchPacketConn(server, 1)
+	wrapped, err := NewPunchPacketConn(server, testMask, 1)
 	require.NoError(t, err)
 
 	txID := stun.NewTransactionID()
@@ -219,7 +219,7 @@ func TestPunchPacketConnExposesUDPMethods(t *testing.T) {
 	udp := listenUDP4(t)
 	defer udp.Close()
 
-	wrapped, err := NewPunchPacketConn(udp, 1)
+	wrapped, err := NewPunchPacketConn(udp, testMask, 1)
 	require.NoError(t, err)
 
 	rc, err := wrapped.SyscallConn()
@@ -231,7 +231,7 @@ func TestPunchPacketConnExposesUDPMethods(t *testing.T) {
 }
 
 func TestPunchPacketConnUnsupportedWhenNotUDP(t *testing.T) {
-	wrapped, err := NewPunchPacketConn(&nonUDPPacketConn{}, 1)
+	wrapped, err := NewPunchPacketConn(&nonUDPPacketConn{}, testMask, 1)
 	require.NoError(t, err)
 
 	_, err = wrapped.SyscallConn()
@@ -318,13 +318,13 @@ func TestPunchPacketConnRoutesAmongManyAttempts(t *testing.T) {
 	peer := listenUDP4(t)
 	defer peer.Close()
 
-	wrapped, err := NewPunchPacketConn(server, 4)
+	wrapped, err := NewPunchPacketConn(server, testMask, 4)
 	require.NoError(t, err)
 	events := addPunchAttempts(t, wrapped, attempts)
 	pumpPunchPacketConn(t, wrapped)
 
 	for _, i := range []int{0, 1, attempts / 2, attempts - 1} {
-		packet, err := EncodePunchPacket(PunchPacketHello, testPunchMetadataN(i))
+		packet, err := EncodePunchPacket(PunchPacketHello, testPunchMetadataN(i), testMask)
 		require.NoError(t, err)
 		_, err = peer.WriteTo(packet, server.LocalAddr())
 		require.NoError(t, err)
@@ -353,13 +353,13 @@ func TestPunchPacketConnPassesUnregisteredPunchPacketThrough(t *testing.T) {
 	peer := listenUDP4(t)
 	defer peer.Close()
 
-	wrapped, err := NewPunchPacketConn(server, 4)
+	wrapped, err := NewPunchPacketConn(server, testMask, 4)
 	require.NoError(t, err)
 	events := addPunchAttempts(t, wrapped, 64)
 
 	// Valid punch packet, but for metadata nobody registered: it is not ours,
 	// so it belongs to the reader above like any other unknown packet.
-	packet, err := EncodePunchPacket(PunchPacketHello, testPunchMetadataN(1000))
+	packet, err := EncodePunchPacket(PunchPacketHello, testPunchMetadataN(1000), testMask)
 	require.NoError(t, err)
 	_, err = peer.WriteTo(packet, server.LocalAddr())
 	require.NoError(t, err)
@@ -377,38 +377,25 @@ func TestPunchPacketConnPassesUnregisteredPunchPacketThrough(t *testing.T) {
 	}
 }
 
-// A tag collision must not lose the packet: the bucket is walked, so both
-// attempts still get exactly their own traffic.
-func TestPunchPacketConnHandlesTagCollisions(t *testing.T) {
+// Attempts are indexed by the nonce on the wire, so two attempts sharing
+// metadata are one attempt as far as any packet can tell. The first registered
+// takes the traffic; the second must not silently take it instead.
+func TestPunchPacketConnSharedNonceGoesToTheFirstAttempt(t *testing.T) {
 	server := listenUDP4(t)
 	defer server.Close()
 	peer := listenUDP4(t)
 	defer peer.Close()
 
-	wrapped, err := NewPunchPacketConn(server, 4)
+	wrapped, err := NewPunchPacketConn(server, testMask, 4)
 	require.NoError(t, err)
-	metaA := testPunchMetadataN(1)
-	metaB := testPunchMetadataN(2)
-	eventsA, err := wrapped.AddPunchAttempt("attempt-a", metaA)
+	meta := testPunchMetadataN(1)
+	eventsA, err := wrapped.AddPunchAttempt("attempt-a", meta)
 	require.NoError(t, err)
-	eventsB, err := wrapped.AddPunchAttempt("attempt-b", metaB)
+	eventsB, err := wrapped.AddPunchAttempt("attempt-b", meta)
 	require.NoError(t, err)
-
-	// Force the collision the index has to survive: both attempts land in one
-	// bucket, the wrong one first, so the lookup has to walk past it. Real
-	// attempts collide with probability 2^-32 per pair.
-	keyA, err := newPunchKey(metaA)
-	require.NoError(t, err)
-	keyB, err := newPunchKey(metaB)
-	require.NoError(t, err)
-	wrapped.mu.Lock()
-	attemptB := wrapped.attempts["attempt-b"]
-	delete(wrapped.byTag, keyB.tag)
-	wrapped.byTag[keyA.tag] = append([]*punchAttempt{attemptB}, wrapped.byTag[keyA.tag]...)
-	wrapped.mu.Unlock()
 
 	pumpPunchPacketConn(t, wrapped)
-	packet, err := EncodePunchPacket(PunchPacketHello, metaA)
+	packet, err := EncodePunchPacket(PunchPacketHello, meta, testMask)
 	require.NoError(t, err)
 	_, err = peer.WriteTo(packet, server.LocalAddr())
 	require.NoError(t, err)
@@ -417,11 +404,11 @@ func TestPunchPacketConnHandlesTagCollisions(t *testing.T) {
 	case ev := <-eventsA:
 		assert.Equal(t, "attempt-a", ev.AttemptID)
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for the colliding attempt's packet")
+		t.Fatal("timed out waiting for the first attempt's packet")
 	}
 	select {
 	case ev := <-eventsB:
-		t.Fatalf("colliding attempt stole the packet: %+v", ev)
+		t.Fatalf("second attempt with the same nonce took the packet: %+v", ev)
 	default:
 	}
 }
@@ -434,7 +421,7 @@ func BenchmarkPunchPacketConnReadFrom(b *testing.B) {
 	for _, attempts := range []int{0, 1, 64, 1024} {
 		b.Run(fmt.Sprintf("attempts=%d", attempts), func(b *testing.B) {
 			underlying := &memPacketConn{payload: quicLikePayload(1200), addr: &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 4433}}
-			conn, err := NewPunchPacketConn(underlying, 1)
+			conn, err := NewPunchPacketConn(underlying, testMask, 1)
 			require.NoError(b, err)
 			addPunchAttempts(b, conn, attempts)
 			buf := make([]byte, 1500)
@@ -450,14 +437,22 @@ func BenchmarkPunchPacketConnReadFrom(b *testing.B) {
 }
 
 // BenchmarkPunchPacketConnReadFromSprayed is the DoS case: packets that are the
-// right length for a punch packet but decode for nobody.
+// right length for a punch packet but decode for nobody. The sprayed packet is
+// masked with this realm's key, so it is the worst case rather than the
+// cheapest one — it survives the magic check and reaches the nonce lookup,
+// which is as far as an attacker without the realm password can ever get.
+//
+// The numbers that matter are the differences between rows: a version that
+// trial-decrypts per attempt ran 26 ns / 128 ns / 6.6 us / 96 us across
+// 0/1/64/1024 attempts, against a ~1 us baseline for the rest of the receive
+// path. See docs/design/p1-punch-envelope.md.
 func BenchmarkPunchPacketConnReadFromSprayed(b *testing.B) {
 	for _, attempts := range []int{0, 1, 64, 1024} {
 		b.Run(fmt.Sprintf("attempts=%d", attempts), func(b *testing.B) {
-			sprayed, err := EncodePunchPacket(PunchPacketHello, testPunchMetadataN(1<<20))
+			sprayed, err := EncodePunchPacket(PunchPacketHello, testPunchMetadataN(1<<20), testMask)
 			require.NoError(b, err)
 			underlying := &memPacketConn{payload: sprayed, addr: &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 4433}}
-			conn, err := NewPunchPacketConn(underlying, 1)
+			conn, err := NewPunchPacketConn(underlying, testMask, 1)
 			require.NoError(b, err)
 			addPunchAttempts(b, conn, attempts)
 			buf := make([]byte, 1500)

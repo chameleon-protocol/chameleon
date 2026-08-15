@@ -27,7 +27,7 @@ func TestPunchIgnoresSourceOutsideCandidates(t *testing.T) {
 	stop := floodHello(t, forger, clientAddr, meta)
 	defer stop()
 
-	_, err := Punch(context.Background(), client, []netip.AddrPort{clientAddr},
+	_, err := Punch(context.Background(), client, testMask, []netip.AddrPort{clientAddr},
 		[]netip.AddrPort{packetConnAddrPort(t, announced)}, meta, PunchConfig{
 			Timeout:  300 * time.Millisecond,
 			Interval: 10 * time.Millisecond,
@@ -63,7 +63,7 @@ func TestPunchAcceptsPredictedSymmetricNATPort(t *testing.T) {
 	}
 	ackDone := ackOnHello(t, peer, meta)
 
-	result, err := Punch(context.Background(), client, []netip.AddrPort{clientAddr}, announced, meta, PunchConfig{
+	result, err := Punch(context.Background(), client, testMask, []netip.AddrPort{clientAddr}, announced, meta, PunchConfig{
 		Timeout:  time.Second,
 		Interval: 10 * time.Millisecond,
 	})
@@ -86,7 +86,7 @@ func TestPunchCandidateHostsPolicyAcceptsUnpredictedPort(t *testing.T) {
 	stop := floodHello(t, peer, clientAddr, meta)
 	defer stop()
 
-	result, err := Punch(context.Background(), client, []netip.AddrPort{clientAddr},
+	result, err := Punch(context.Background(), client, testMask, []netip.AddrPort{clientAddr},
 		[]netip.AddrPort{packetConnAddrPort(t, announced)}, meta, PunchConfig{
 			Timeout:      time.Second,
 			Interval:     10 * time.Millisecond,
@@ -102,7 +102,7 @@ func TestPunchRejectsUnknownSourcePolicy(t *testing.T) {
 	peer := listenUDP4(t)
 	defer peer.Close()
 
-	_, err := Punch(context.Background(), client, []netip.AddrPort{packetConnAddrPort(t, client)},
+	_, err := Punch(context.Background(), client, testMask, []netip.AddrPort{packetConnAddrPort(t, client)},
 		[]netip.AddrPort{packetConnAddrPort(t, peer)}, testPunchMetadata(), PunchConfig{
 			SourcePolicy: PunchSourcePolicy(42),
 		})
@@ -222,7 +222,7 @@ func TestCandidatePunchAddrsCapsCandidateCount(t *testing.T) {
 // called, so a punch attempt cannot miss them by timing.
 func floodHello(t *testing.T, conn net.PacketConn, addr netip.AddrPort, meta PunchMetadata) func() {
 	t.Helper()
-	packet, err := EncodePunchPacket(PunchPacketHello, meta)
+	packet, err := EncodePunchPacket(PunchPacketHello, meta, testMask)
 	require.NoError(t, err)
 	done := make(chan struct{})
 	stopped := make(chan struct{})
@@ -259,11 +259,11 @@ func ackOnHello(t *testing.T, conn net.PacketConn, meta PunchMetadata) <-chan st
 			if err != nil {
 				return
 			}
-			packet, err := DecodePunchPacket(buf[:n], meta)
+			packet, err := DecodePunchPacket(buf[:n], meta, testMask)
 			if err != nil || packet.Type != PunchPacketHello {
 				continue
 			}
-			ack, err := EncodePunchPacket(PunchPacketAck, meta)
+			ack, err := EncodePunchPacket(PunchPacketAck, meta, testMask)
 			if err != nil {
 				return
 			}

@@ -386,6 +386,12 @@ func (c *serverConfig) fillRealmConn(hyConfig *server.Config, addr *realm.Addr) 
 	if err != nil {
 		return configError{Field: "realm.ipMode", Err: err}
 	}
+	// Before the socket: a realm listener that cannot mask its punch packets
+	// must not come up at all.
+	punchMask, err := c.realmPunchMask()
+	if err != nil {
+		return err
+	}
 	listenAddr := &net.UDPAddr{}
 	if addr.LocalPort != 0 {
 		listenAddr.Port = addr.LocalPort
@@ -398,7 +404,7 @@ func (c *serverConfig) fillRealmConn(hyConfig *server.Config, addr *realm.Addr) 
 		zap.String("realm", addr.RealmID),
 		zap.String("local", conn.LocalAddr().String()))
 
-	punchConn, err := realm.NewPunchPacketConn(conn, 0)
+	punchConn, err := realm.NewPunchPacketConn(conn, punchMask, 0)
 	if err != nil {
 		_ = conn.Close()
 		return configError{Field: "realm", Err: err}
@@ -419,6 +425,13 @@ func (c *serverConfig) fillRealmConn(hyConfig *server.Config, addr *realm.Addr) 
 	hyConfig.Conn = packetConn
 	hyConfig.Cleanup = runtime
 	return nil
+}
+
+func (c *serverConfig) realmPunchMask() (realm.PunchMask, error) {
+	return realmPunchMask(c.Obfs.Type,
+		c.Obfs.Salamander.Password,
+		c.Obfs.SalamanderV2.Password, c.Obfs.SalamanderV2.Realm,
+		c.Obfs.Gecko.Password)
 }
 
 func (c *serverConfig) wrapObfs(conn net.PacketConn) (net.PacketConn, error) {

@@ -20,7 +20,7 @@ func TestPunchProbesEndpointDependentPeer(t *testing.T) {
 		netip.MustParseAddrPort("198.51.100.20:51234"),
 	}
 	plan, err := newPunchPlan([]netip.AddrPort{netip.MustParseAddrPort("192.0.2.10:1234")},
-		peer, testPunchMetadata(), PunchConfig{}, PunchSourceCandidates, testLocalUDPAddr)
+		peer, testPunchMetadata(), testMask, PunchConfig{}, PunchSourceCandidates, testLocalUDPAddr)
 	require.NoError(t, err)
 
 	assert.Len(t, plan.probes, defaultSymmetricNATProbes)
@@ -36,7 +36,7 @@ func TestPunchProbesEndpointDependentPeer(t *testing.T) {
 func TestPunchDoesNotProbeAPredictablePeer(t *testing.T) {
 	peer := []netip.AddrPort{netip.MustParseAddrPort("198.51.100.20:40000")}
 	plan, err := newPunchPlan([]netip.AddrPort{netip.MustParseAddrPort("192.0.2.10:1234")},
-		peer, testPunchMetadata(), PunchConfig{}, PunchSourceCandidates, testLocalUDPAddr)
+		peer, testPunchMetadata(), testMask, PunchConfig{}, PunchSourceCandidates, testLocalUDPAddr)
 	require.NoError(t, err)
 
 	assert.Empty(t, plan.probes)
@@ -49,7 +49,7 @@ func TestPunchProbingCanBeDisabled(t *testing.T) {
 		netip.MustParseAddrPort("198.51.100.20:51234"),
 	}
 	plan, err := newPunchPlan([]netip.AddrPort{netip.MustParseAddrPort("192.0.2.10:1234")},
-		peer, testPunchMetadata(), PunchConfig{SymmetricNAT: SymmetricNATConfig{Disable: true}},
+		peer, testPunchMetadata(), testMask, PunchConfig{SymmetricNAT: SymmetricNATConfig{Disable: true}},
 		PunchSourceCandidates, testLocalUDPAddr)
 	require.NoError(t, err)
 	assert.Empty(t, plan.probes)
@@ -65,7 +65,7 @@ func TestPunchProbesStayUnderTheRateLimit(t *testing.T) {
 	const rate = 100
 	const timeout = 350 * time.Millisecond
 	plan, err := newPunchPlan([]netip.AddrPort{netip.MustParseAddrPort("192.0.2.10:1234")},
-		peer, testPunchMetadata(), PunchConfig{
+		peer, testPunchMetadata(), testMask, PunchConfig{
 			Timeout: timeout,
 			// Long enough that the announced candidates are sent once and do
 			// not muddy the count.
@@ -102,7 +102,7 @@ func TestPunchStopsProbingAfterTheBudget(t *testing.T) {
 		netip.MustParseAddrPort("198.51.100.20:51234"),
 	}
 	plan, err := newPunchPlan([]netip.AddrPort{netip.MustParseAddrPort("192.0.2.10:1234")},
-		peer, testPunchMetadata(), PunchConfig{
+		peer, testPunchMetadata(), testMask, PunchConfig{
 			Timeout:  400 * time.Millisecond,
 			Interval: time.Hour,
 			SymmetricNAT: SymmetricNATConfig{
@@ -145,7 +145,7 @@ func TestPunchGivesUpFastWhenBothEndsAreEndpointDependent(t *testing.T) {
 		netip.MustParseAddrPort("198.51.100.20:40000"),
 		netip.MustParseAddrPort("198.51.100.20:51234"),
 	}
-	plan, err := newPunchPlan(local, peer, testPunchMetadata(), PunchConfig{
+	plan, err := newPunchPlan(local, peer, testPunchMetadata(), testMask, PunchConfig{
 		Timeout:      time.Hour,
 		Interval:     10 * time.Millisecond,
 		SymmetricNAT: SymmetricNATConfig{BothEndsTimeout: 100 * time.Millisecond},
@@ -181,7 +181,7 @@ func TestPunchBothEndsEndpointDependentEndToEnd(t *testing.T) {
 	peers := []netip.AddrPort{peerAddr, netip.AddrPortFrom(peerAddr.Addr(), peerAddr.Port()+1000)}
 
 	start := time.Now()
-	_, err := Punch(context.Background(), client, local, peers, meta, PunchConfig{
+	_, err := Punch(context.Background(), client, testMask, local, peers, meta, PunchConfig{
 		Timeout:      time.Hour,
 		Interval:     10 * time.Millisecond,
 		SymmetricNAT: SymmetricNATConfig{BothEndsTimeout: 100 * time.Millisecond},
@@ -195,7 +195,7 @@ func TestPunchNATClassOverridesWinOverInference(t *testing.T) {
 	// (a peer that reported its own NAT class, say).
 	peer := []netip.AddrPort{netip.MustParseAddrPort("198.51.100.20:40000")}
 	plan, err := newPunchPlan([]netip.AddrPort{netip.MustParseAddrPort("192.0.2.10:1234")},
-		peer, testPunchMetadata(), PunchConfig{
+		peer, testPunchMetadata(), testMask, PunchConfig{
 			SymmetricNAT: SymmetricNATConfig{PeerNAT: NATClassEndpointDependent, Probes: 32},
 		}, PunchSourceCandidates, testLocalUDPAddr)
 	require.NoError(t, err)
@@ -204,7 +204,7 @@ func TestPunchNATClassOverridesWinOverInference(t *testing.T) {
 	// And a caller that knows it is behind an endpoint-dependent NAT itself
 	// gets the fast give-up even though its own address list is inconclusive.
 	plan, err = newPunchPlan([]netip.AddrPort{netip.MustParseAddrPort("192.0.2.10:1234")},
-		peer, testPunchMetadata(), PunchConfig{
+		peer, testPunchMetadata(), testMask, PunchConfig{
 			SymmetricNAT: SymmetricNATConfig{
 				LocalNAT: NATClassEndpointDependent,
 				PeerNAT:  NATClassEndpointDependent,
@@ -221,7 +221,7 @@ func TestPunchProbeCountIsCapped(t *testing.T) {
 		netip.MustParseAddrPort("198.51.100.20:51234"),
 	}
 	plan, err := newPunchPlan([]netip.AddrPort{netip.MustParseAddrPort("192.0.2.10:1234")},
-		peer, testPunchMetadata(), PunchConfig{
+		peer, testPunchMetadata(), testMask, PunchConfig{
 			SymmetricNAT: SymmetricNATConfig{Probes: 1 << 20},
 		}, PunchSourceCandidates, testLocalUDPAddr)
 	require.NoError(t, err)

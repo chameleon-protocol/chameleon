@@ -126,11 +126,16 @@ type PunchResult struct {
 // the candidate set are ignored rather than reported, so a rendezvous server
 // cannot answer with metadata of its own and hand the caller a QUIC peer it
 // never announced.
-func Punch(ctx context.Context, conn net.PacketConn, localAddrs, peerAddrs []netip.AddrPort, meta PunchMetadata, config PunchConfig) (PunchResult, error) {
+func Punch(ctx context.Context, conn net.PacketConn, mask PunchMask, localAddrs, peerAddrs []netip.AddrPort, meta PunchMetadata, config PunchConfig) (PunchResult, error) {
 	if conn == nil {
 		return PunchResult{}, fmt.Errorf("%w: conn is nil", ErrInvalidPunchConfig)
 	}
 	if demux, ok := conn.(*PunchPacketConn); ok {
+		// The demux unmasks with the key it was built with, so an attempt that
+		// masked with a different one would send packets its own conn drops.
+		if !demux.mask.equal(mask) {
+			return PunchResult{}, fmt.Errorf("%w: mask does not match the conn", ErrInvalidPunchConfig)
+		}
 		puncher, err := NewPuncher(demux)
 		if err != nil {
 			return PunchResult{}, err
@@ -141,7 +146,7 @@ func Punch(ctx context.Context, conn net.PacketConn, localAddrs, peerAddrs []net
 		}
 		return puncher.Punch(ctx, id, localAddrs, peerAddrs, meta, config)
 	}
-	plan, err := newPunchPlan(localAddrs, peerAddrs, meta, config, PunchSourceCandidates, conn.LocalAddr())
+	plan, err := newPunchPlan(localAddrs, peerAddrs, meta, mask, config, PunchSourceCandidates, conn.LocalAddr())
 	if err != nil {
 		return PunchResult{}, err
 	}
@@ -184,8 +189,8 @@ type punchPlan struct {
 	bothEndsSymmetric bool
 }
 
-func newPunchPlan(localAddrs, peerAddrs []netip.AddrPort, meta PunchMetadata, config PunchConfig, fallbackPolicy PunchSourcePolicy, local net.Addr) (punchPlan, error) {
-	key, err := newPunchKey(meta)
+func newPunchPlan(localAddrs, peerAddrs []netip.AddrPort, meta PunchMetadata, mask PunchMask, config PunchConfig, fallbackPolicy PunchSourcePolicy, local net.Addr) (punchPlan, error) {
+	key, err := newPunchKey(meta, mask)
 	if err != nil {
 		return punchPlan{}, err
 	}
@@ -465,9 +470,29 @@ func (f punchSourceFilter) allows(addr netip.AddrPort) bool {
 	}
 }
 
+// sendPunchPacket puts one punch packet on the wire at a length the socket has
+// already sent, when it is a conn that can tell us one.
 func sendPunchPacket(conn net.PacketConn, addr netip.AddrPort, key punchKey, packetType PunchPacketType) {
-	packet, err := encodePunchPacket(packetType, key)
+	demux, _ := conn.(*PunchPacketConn)
+	var (
+		wireLen int
+		err     error
+	)
+	if demux != nil {
+		wireLen, err = demux.sampleWireLen()
+	} else {
+		wireLen, err = fallbackPunchWireLen()
+	}
 	if err != nil {
+		return
+	}
+	packet, err := encodePunchPacket(packetType, key, wireLen)
+	if err != nil {
+		return
+	}
+	if demux != nil {
+		// Not through WriteTo: a punch packet must not become a sample.
+		_, _ = demux.writePunch(packet, udpAddrFromAddrPort(addr))
 		return
 	}
 	_, _ = conn.WriteTo(packet, udpAddrFromAddrPort(addr))
