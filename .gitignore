@@ -473,3 +473,4 @@ test-configs/
 
 # Design and research notes stay local.
 docs/
+tests/spike/
