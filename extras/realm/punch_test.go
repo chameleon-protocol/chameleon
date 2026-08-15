@@ -246,8 +246,8 @@ func TestPunchPacketRejectsBadMetadata(t *testing.T) {
 // nearly lost. A fallback that returns a constant is the fixed-target mistake
 // the design rejects by name -- 1250 was measured as a beacon -- and every
 // bound above still holds while it happens, so only the count of distinct
-// lengths catches it. Over 256 draws from a 193-wide band, seeing one length is
-// a 193^-255 event.
+// lengths catches it. Over 256 draws from a 194-wide band, seeing one length is
+// a 194^-255 event.
 func TestPunchPacketFallbackLengthLandsInTheQUICBand(t *testing.T) {
 	meta := testPunchMetadata()
 	mask := testMask
@@ -256,7 +256,7 @@ func TestPunchPacketFallbackLengthLandsInTheQUICBand(t *testing.T) {
 		packet, err := EncodePunchPacket(PunchPacketHello, meta, mask)
 		require.NoError(t, err)
 		assert.GreaterOrEqual(t, len(packet), 1200)
-		assert.LessOrEqual(t, len(packet), 1472)
+		assert.LessOrEqual(t, len(packet), 1473)
 		seen[len(packet)] = struct{}{}
 	}
 	assert.Greater(t, len(seen), 1, "every fallback packet came out the same length")

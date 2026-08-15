@@ -169,12 +169,22 @@ func TestPunchLengthSamplerSkipsUnusableLengths(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, conn.lengths.count.Load())
 
+	// The modal wire length of a salamander v2 server is 1473 bytes, captured.
+	// The ceiling used to sit at 1472, so the sampler threw away the one length
+	// a responder most needs to copy and padded from the fallback band instead,
+	// on a socket that was carrying exactly the right lengths to imitate.
+	_, err = conn.WriteTo(make([]byte, 1473), rec.addr)
+	require.NoError(t, err)
+	n, ok := conn.lengths.sample()
+	require.True(t, ok, "a datagram this socket sent did not become a sample")
+	assert.Equal(t, 1473, n)
+
 	rec.reset()
 	for range 16 {
 		sendPunchPacket(conn, peer, key, PunchPacketHello)
 	}
 	for _, n := range rec.written() {
 		assert.GreaterOrEqual(t, n, 1200)
-		assert.LessOrEqual(t, n, 1472)
+		assert.LessOrEqual(t, n, 1473)
 	}
 }

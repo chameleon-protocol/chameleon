@@ -17,26 +17,27 @@ const (
 	// header has to fit in one SHA-256 output, see xorPunchHeader.
 	punchHeaderLen  = 8 + 1 + PunchNonceSize
 	punchMinWireLen = punchSaltLen + punchHeaderLen
-	// punchMaxWireLen is the largest datagram that fits an Ethernet MTU without
-	// fragmenting on IPv4: 1500 less 20 bytes of IP header and 8 of UDP.
+	// punchMaxWireLen is the ceiling on a punch packet, and with it the ceiling
+	// of the length sampler (wireLenSampler.observe). It has to be at least the
+	// largest datagram this socket can put on the wire, or the sampler throws
+	// away the very lengths a punch packet most wants to copy.
 	//
-	// It doubles as the ceiling of the length sampler (wireLenSampler.observe),
-	// which is why the arithmetic is worth writing down. quic-go caps its own
-	// packets at MaxPacketBufferSize (1452) and path MTU discovery runs under
-	// the obfuscator, so on a 1500-byte path it converges to 1440 and salamander
-	// v2's 32 bytes bring the wire datagram to exactly 1472. On any path that
-	// fits an Ethernet MTU -- which is what a NAT-traversal path is -- this cap
-	// therefore filters nothing the socket sends.
+	// It was 1472 -- an Ethernet MTU less the IPv4 and UDP headers -- on the
+	// reasoning that path MTU discovery would converge to 1440 under the
+	// obfuscator and salamander v2's 32 bytes would land the datagram on
+	// exactly 1472. Captured rather than derived, the modal wire lengths are
+	// 1439 (plain, client to server), 1441 (plain, server to client), 1471
+	// (salamander v2, client to server) and 1473 (salamander v2, server to
+	// client). The last one is one byte over the old cap, so the sampler
+	// discarded the modal length of the direction a responder sends in --
+	// leaving the responder padding from the fallback band on a socket that
+	// was carrying perfectly good lengths to copy.
 	//
-	// Above that it does filter: a path with an MTU of 1516 or more lets quic-go
-	// sit at its own 1452 ceiling, putting 1484 on the wire, and those samples
-	// are dropped. What the sampler keeps there are the smaller datagrams the
-	// connection also sends, which are still lengths that flow produces -- not
-	// novel, just not the modal one. Loopback is the case that reaches it in
-	// practice. Raising the cap to cover it would let a punch packet be built
-	// at a size the next hop may not carry, in exchange for nothing the spike
-	// measured, so the cap stays where the wire puts it.
-	punchMaxWireLen = 1472
+	// 1484 is where quic-go's own ceiling puts it: MaxPacketBufferSize (1452)
+	// plus salamander v2's 32 bytes. A sampled length is one this socket has
+	// already delivered, so copying it cannot exceed what the path carries;
+	// the cap only has to be high enough not to drop the sample.
+	punchMaxWireLen = 1484
 	// MaxPunchPadding is what is left for padding at the largest wire length.
 	MaxPunchPadding = punchMaxWireLen - punchMinWireLen
 
@@ -58,9 +59,17 @@ const (
 	// its socket has written a datagram of at least punchMinWireLen. A realm
 	// server writes nothing else before its first QUIC connection exists except
 	// STUN binding requests, and at 20 bytes those are under the floor and never
-	// become samples -- so the first punch response after a restart goes out
-	// here, and only the ones after it copy a real length.
-	// TestPunchResponderFallsBackUntilTheSocketHasSentQUIC pins that window.
+	// become samples.
+	//
+	// That window is not one packet wide. Punch packets are written around the
+	// sampler on purpose, so sending them never closes it: only a real datagram
+	// does. A responder re-sends its hello to every target every punch interval
+	// for the whole punch timeout, so at the shipped defaults an attempt that
+	// starts before the first QUIC connection puts on the order of a hundred
+	// fallback-band datagrams on the wire, and the next attempt does it again
+	// until something else has written. TestPunchResponderFallsBackUntilThe
+	// SocketHasSentQUIC pins the window by sending 64 and requiring all 64 to
+	// land in the band.
 	// The spike measures that band server-to-client at 0% under salamander v2,
 	// but says in the same breath that the 0% is the whitelist crossing its
 	// false-positive threshold on a direction with 66 distinct lengths -- luck,
@@ -70,7 +79,11 @@ const (
 	// about to send, which is deterministic but known neither here nor to the
 	// code that wires this up; see docs/design/p1-punch-envelope.md.
 	punchFallbackMinLen = 1280
-	punchFallbackMaxLen = punchMaxWireLen
+	// Not punchMaxWireLen: that is the sampler's ceiling, set high enough not to
+	// drop a real sample, and drawing from it would put lengths on the wire that
+	// no measured flow produces -- the novelty this band exists to avoid. 1473 is
+	// the largest modal wire length captured (salamander v2, server to client).
+	punchFallbackMaxLen = 1473
 )
 
 var (
