@@ -70,10 +70,11 @@ const (
 	// until something else has written. TestPunchResponderFallsBackUntilThe
 	// SocketHasSentQUIC pins the window by sending 64 and requiring all 64 to
 	// land in the band.
-	// The spike measures that band server-to-client at 0% under salamander v2,
-	// but says in the same breath that the 0% is the whitelist crossing its
-	// false-positive threshold on a direction with 66 distinct lengths -- luck,
-	// not a property of the band.
+	// One capture put that band at 0% server-to-client and said in the same
+	// breath that the 0% was the whitelist crossing its false-positive
+	// threshold rather than a property of the band. Three later captures put it
+	// at 85-88%, which is what the first one was warning about. Both ends name
+	// a length now, so neither reaches the band in normal operation.
 	//
 	// This band is now the last resort rather than the initiator's normal case.
 	// A caller that can name the length its connection will mostly send at

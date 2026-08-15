@@ -101,8 +101,8 @@ func mergeCancel(ctx, other context.Context) (context.Context, context.CancelFun
 // demuxPunchTransport takes its inbound packets from the conn's demux, which is
 // what lets a punch attempt share the socket with a running QUIC connection.
 type demuxPunchTransport struct {
-	conn           *PunchPacketConn
-	events         <-chan PunchPacketEvent
+	conn         *PunchPacketConn
+	events       <-chan PunchPacketEvent
 	padToWireLen int
 }
 

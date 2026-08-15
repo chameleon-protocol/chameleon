@@ -244,7 +244,7 @@ func newPunchPlan(localAddrs, peerAddrs []netip.AddrPort, meta PunchMetadata, ma
 		key:               key,
 		targets:           targets,
 		interval:          interval,
-		padToWireLen:    config.PadToWireLen,
+		padToWireLen:      config.PadToWireLen,
 		bothEndsSymmetric: localNAT == NATClassEndpointDependent && peerNAT == NATClassEndpointDependent,
 	}
 	// Probing is worth its packets only when we can be found at a predictable
@@ -409,10 +409,10 @@ func (p punchPlan) timeoutError(err error) error {
 // directPunchTransport reads the socket itself. It cannot coexist with another
 // reader, so it is only for a socket that has not been handed to QUIC yet.
 type directPunchTransport struct {
-	conn           net.PacketConn
-	key            punchKey
+	conn         net.PacketConn
+	key          punchKey
 	padToWireLen int
-	buf            []byte
+	buf          []byte
 }
 
 func (t *directPunchTransport) send(to netip.AddrPort, packetType PunchPacketType, key punchKey) {

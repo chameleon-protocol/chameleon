@@ -30,7 +30,12 @@ const (
 	// What a quic-go connection settles on for a full datagram on a 1500-byte
 	// path, measured. Not derived from the MTU: quic-go's own ceiling and its
 	// probe schedule decide where it stops, and 1500 - 20 - 8 is not where.
-	quicFullDatagramSize = 1439
+	//
+	// The two directions differ by two bytes and each side has to use its own:
+	// a responder padding to the client's modal length is padding to a length
+	// its own direction does not have as its mode.
+	quicFullDatagramSize       = 1439
+	quicFullDatagramSizeServer = 1441
 )
 
 // realmPunchWireLen returns the wire length this client's connection will
@@ -41,6 +46,16 @@ const (
 // caller that cannot name the length is better off with the fallback band than
 // with a confident wrong number.
 func realmPunchWireLen(obfsType string, probe net.PacketConn) int {
+	return punchWireLen(obfsType, probe, quicFullDatagramSize)
+}
+
+// realmPunchWireLenServer is the same for a responder, whose modal datagram is
+// two bytes longer than a client's.
+func realmPunchWireLenServer(obfsType string, probe net.PacketConn) int {
+	return punchWireLen(obfsType, probe, quicFullDatagramSizeServer)
+}
+
+func punchWireLen(obfsType string, probe net.PacketConn, fullDatagram int) int {
 	overhead, ok := obfs.WireOverheadOf(probe)
 	if !ok {
 		return 0
@@ -54,5 +69,5 @@ func realmPunchWireLen(obfsType string, probe net.PacketConn) int {
 	default:
 		return 0
 	}
-	return quicFullDatagramSize + overhead
+	return fullDatagram + overhead
 }

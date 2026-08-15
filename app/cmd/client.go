@@ -888,9 +888,9 @@ func (c *clientConfig) realmConfig(addr *realm.Addr) (*client.Config, error) {
 		return nil, err
 	}
 	result, err := realm.Punch(ctx, baseConn, punchMask, localAddrs, peerAddrs, connectResp.PunchMetadata, realm.PunchConfig{
-		Timeout:        c.Realm.PunchTimeout,
-		Family:         family,
-		SourcePolicy:   realm.PunchSourceCandidates,
+		Timeout:      c.Realm.PunchTimeout,
+		Family:       family,
+		SourcePolicy: realm.PunchSourceCandidates,
 		PadToWireLen: realmPunchWireLen(c.Obfs.Type, finalConn),
 	})
 	if err != nil {

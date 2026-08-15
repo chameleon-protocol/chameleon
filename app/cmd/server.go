@@ -416,7 +416,8 @@ func (c *serverConfig) fillRealmConn(hyConfig *server.Config, addr *realm.Addr) 
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	runtime, err := c.startRealmServerRuntime(ctx, cancel, addr, punchConn, family)
+	runtime, err := c.startRealmServerRuntime(ctx, cancel, addr, punchConn, family,
+		realmPunchWireLenServer(c.Obfs.Type, packetConn))
 	if err != nil {
 		cancel()
 		_ = packetConn.Close()
@@ -486,7 +487,7 @@ func resolveServerListenAddr(listenAddr string) (*net.UDPAddr, eUtils.PortUnion,
 	return uAddr, portUnion, err
 }
 
-func (c *serverConfig) startRealmServerRuntime(ctx context.Context, cancel context.CancelFunc, addr *realm.Addr, punchConn *realm.PunchPacketConn, family realm.AddrFamily) (*realmServerRuntime, error) {
+func (c *serverConfig) startRealmServerRuntime(ctx context.Context, cancel context.CancelFunc, addr *realm.Addr, punchConn *realm.PunchPacketConn, family realm.AddrFamily, padToWireLen int) (*realmServerRuntime, error) {
 	stunServers := c.realmSTUNServers(addr)
 	rClient, err := realm.NewClientFromAddr(addr, c.realmHTTPClient())
 	if err != nil {
@@ -506,6 +507,8 @@ func (c *serverConfig) startRealmServerRuntime(ctx context.Context, cancel conte
 		config:      c.Realm,
 		family:      family,
 		localPort:   localPort(punchConn.LocalAddr()),
+
+		padToWireLen: padToWireLen,
 	}
 	// Gateway port mapping (UPnP/NAT-PMP) runs before STUN.
 	// With the pinhole in place, in a double-NAT setup,
@@ -563,11 +566,14 @@ type realmServerRuntime struct {
 	realmID     string
 	punchConn   *realm.PunchPacketConn
 	stunServers []string
-	puncher     *realm.ServerPuncher
-	config      serverConfigRealm
-	family      realm.AddrFamily
-	localPort   uint16            // the punch socket's port, shared by every local candidate
-	mapper      *realm.PortMapper // nil if port mapping is disabled or failed
+	// padToWireLen is the length a punch response is padded to before this
+	// socket has sent a QUIC datagram of its own. See realmPunchWireLenServer.
+	padToWireLen int
+	puncher      *realm.ServerPuncher
+	config       serverConfigRealm
+	family       realm.AddrFamily
+	localPort    uint16            // the punch socket's port, shared by every local candidate
+	mapper       *realm.PortMapper // nil if port mapping is disabled or failed
 
 	mu      sync.Mutex
 	session realmSession
@@ -847,8 +853,9 @@ func (r *realmServerRuntime) respond(ctx context.Context, ev *realm.PunchEvent) 
 		zap.Strings("candidates", ev.Addresses))
 	start := time.Now()
 	result, err := r.puncher.Respond(ctx, ev.Nonce, freshAddrs, peerAddrs, ev.PunchMetadata, realm.PunchConfig{
-		Timeout: r.config.PunchTimeout,
-		Family:  r.family,
+		Timeout:      r.config.PunchTimeout,
+		Family:       r.family,
+		PadToWireLen: r.padToWireLen,
 	})
 	if err != nil {
 		logger.Warn("realm punch failed", zap.String("realm", r.realmID), zap.String("attempt", attempt), zap.Error(err))

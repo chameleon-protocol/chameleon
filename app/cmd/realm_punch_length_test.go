@@ -33,6 +33,11 @@ func TestPunchWireLenIsTheModalDatagram(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1471, realmPunchWireLen("salamander-v2", v2))
 
+	// 1473 is the same measurement in the other direction. The two differ, and
+	// a responder padding to the client's mode would be padding to a length its
+	// own direction does not have as its mode.
+	assert.Equal(t, 1473, realmPunchWireLenServer("salamander-v2", v2))
+
 	// Gecko pads every datagram to a random size in a range, so it has no modal
 	// length to aim at and no fixed overhead to add. So does a socket with no
 	// obfuscator at all. Both get the fallback band, which is the honest answer
@@ -41,4 +46,6 @@ func TestPunchWireLenIsTheModalDatagram(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, realmPunchWireLen("gecko", gecko))
 	assert.Zero(t, realmPunchWireLen("plain", udp))
+	assert.Zero(t, realmPunchWireLenServer("gecko", gecko))
+	assert.Zero(t, realmPunchWireLenServer("plain", udp))
 }
