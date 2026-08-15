@@ -104,17 +104,23 @@ type PunchConfig struct {
 	SourcePolicy PunchSourcePolicy
 	SymmetricNAT SymmetricNATConfig
 
-	// InitialWireLen is the length, on the wire, of the first datagram this
-	// socket will send once punching succeeds -- for an initiator, the QUIC
-	// Initial plus whatever the obfuscator adds. Punch packets are padded to
-	// it, so they carry the length of the handshake that is about to follow
-	// instead of a length nothing on this path produces.
+	// PadToWireLen is the wire length punch packets are padded to: the length
+	// the connection this punch is opening will spend most of its life sending.
 	//
-	// It exists because an initiator punches on a bare socket: there is no
-	// sent datagram to copy a length from, and the band used in its absence is
-	// what a classifier that has learned this deployment's lengths offline
-	// picks the packets out by. Zero means unknown, and the band is used.
-	InitialWireLen int
+	// It exists because an initiator punches on a bare socket, with no sent
+	// datagram to copy a length from, and the band used in its absence is what
+	// a classifier that has learned the deployment's lengths offline picks the
+	// packets out by -- measured at 97% client-to-server under salamander v2.
+	//
+	// The modal full datagram is the target, not the handshake's Initial. An
+	// Initial goes out once per connection, so it is never whitelisted and a
+	// burst of punch packets at that length is both novel and alone in its own
+	// length bucket, where its send cadence shows. Measured, aiming at the
+	// Initial scores 0% one direction and 100% the other; aiming at the modal
+	// datagram scores 0% both ways.
+	//
+	// Zero means no length could be named, and the fallback band is used.
+	PadToWireLen int
 }
 
 type PunchResult struct {
@@ -162,7 +168,7 @@ func Punch(ctx context.Context, conn net.PacketConn, mask PunchMask, localAddrs,
 	if err != nil {
 		return PunchResult{}, err
 	}
-	transport := &directPunchTransport{conn: conn, key: plan.key, initialWireLen: plan.initialWireLen}
+	transport := &directPunchTransport{conn: conn, key: plan.key, padToWireLen: plan.padToWireLen}
 	defer conn.SetReadDeadline(time.Time{})
 	return runPunch(ctx, transport, plan)
 }
@@ -183,8 +189,8 @@ type punchPlan struct {
 	key     punchKey
 	sources punchSourceFilter
 
-	// initialWireLen is PunchConfig.InitialWireLen, or zero.
-	initialWireLen int
+	// padToWireLen is PunchConfig.PadToWireLen, or zero.
+	padToWireLen int
 
 	// targets are the announced candidates. They are re-sent every interval,
 	// both to punch and to keep the mapping they opened alive.
@@ -238,7 +244,7 @@ func newPunchPlan(localAddrs, peerAddrs []netip.AddrPort, meta PunchMetadata, ma
 		key:               key,
 		targets:           targets,
 		interval:          interval,
-		initialWireLen:    config.InitialWireLen,
+		padToWireLen:    config.PadToWireLen,
 		bothEndsSymmetric: localNAT == NATClassEndpointDependent && peerNAT == NATClassEndpointDependent,
 	}
 	// Probing is worth its packets only when we can be found at a predictable
@@ -405,12 +411,12 @@ func (p punchPlan) timeoutError(err error) error {
 type directPunchTransport struct {
 	conn           net.PacketConn
 	key            punchKey
-	initialWireLen int
+	padToWireLen int
 	buf            []byte
 }
 
 func (t *directPunchTransport) send(to netip.AddrPort, packetType PunchPacketType, key punchKey) {
-	sendPunchPacket(t.conn, to, key, packetType, t.initialWireLen)
+	sendPunchPacket(t.conn, to, key, packetType, t.padToWireLen)
 }
 
 func (t *directPunchTransport) recvUntil(ctx context.Context, deadline time.Time, key punchKey) (PunchPacketEvent, bool, error) {
@@ -490,12 +496,12 @@ func (f punchSourceFilter) allows(addr netip.AddrPort) bool {
 // sendPunchPacket puts one punch packet on the wire at a length the socket has
 // already sent, when it is a conn that can tell us one.
 //
-// initialWireLen is the length the socket is about to send at, for a socket
+// padToWireLen is the length the socket is about to send at, for a socket
 // that has not sent anything yet. It is preferred over the fallback band and
 // ignored once there is a real sample, which is the ordering the three sources
 // deserve: a length this socket has sent beats a length it is about to send,
 // and both beat a guess.
-func sendPunchPacket(conn net.PacketConn, addr netip.AddrPort, key punchKey, packetType PunchPacketType, initialWireLen int) {
+func sendPunchPacket(conn net.PacketConn, addr netip.AddrPort, key punchKey, packetType PunchPacketType, padToWireLen int) {
 	demux, _ := conn.(*PunchPacketConn)
 	var (
 		wireLen int
@@ -503,9 +509,9 @@ func sendPunchPacket(conn net.PacketConn, addr netip.AddrPort, key punchKey, pac
 	)
 	switch {
 	case demux != nil:
-		wireLen, err = demux.sampleWireLen(initialWireLen)
-	case validPunchWireLen(initialWireLen):
-		wireLen = initialWireLen
+		wireLen, err = demux.sampleWireLen(padToWireLen)
+	case validPunchWireLen(padToWireLen):
+		wireLen = padToWireLen
 	default:
 		wireLen, err = fallbackPunchWireLen()
 	}

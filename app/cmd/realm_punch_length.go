@@ -9,33 +9,38 @@ import (
 
 // An initiator punches on a bare socket: the QUIC connection does not exist
 // yet, so nothing has gone out that a punch packet could copy a length from.
-// What it does know is the length of the datagram it is about to send, because
-// a QUIC Initial is padded to a fixed size and the obfuscator adds a fixed
-// number of bytes on top. Punching at that length makes the punch packets the
-// same size as the handshake that immediately follows them, instead of a size
-// that appears nowhere else on the path.
 //
-// The two sizes are quic-go's, and they are not exported, so they are written
-// out here and pinned by TestPunchInitialWireLenMatchesTheRealHandshake, which
-// dials a real server and measures the first datagram. A wrong constant here
-// would be worse than no constant at all: the whole point is to match, and a
-// value that misses by one byte is a length nothing else on the path produces.
+// What it pads to instead is the length the connection will spend most of its
+// life sending. That is not the Initial, which was the obvious guess and is
+// wrong: an Initial goes out once or twice per connection, so a length
+// classifier trained on real traffic has never seen it often enough to
+// whitelist it, and hundreds of punch packets at that length are both novel and
+// alone in their own length bucket -- which is the condition that makes the
+// probe cadence visible. Measured, padding to the Initial scores 0% one way and
+// 100% the other, against 0% both ways for the modal length.
+//
+// The modal length is the full datagram after path MTU discovery has settled,
+// which is about 60% of everything a loaded connection sends.
+//
+// The number is quic-go's behaviour rather than a constant it exports, so it is
+// measured here and pinned by TestPunchWireLenMatchesTheModalDatagram, which
+// runs a real connection and takes the mode. A value that misses is worse than
+// no value: the whole point is to land in the biggest bucket on the path.
 const (
-	// quic-go internal/protocol.InitialPacketSize.
-	quicInitialPacketSize = 1280
-	// quic-go chrome_parrot.go chromeInitialPacketSize. Chrome sends a smaller
-	// Initial than the quic-go default, and the parrot is on unless disabled.
-	quicChromeInitialPacketSize = 1250
+	// What a quic-go connection settles on for a full datagram on a 1500-byte
+	// path, measured. Not derived from the MTU: quic-go's own ceiling and its
+	// probe schedule decide where it stops, and 1500 - 20 - 8 is not where.
+	quicFullDatagramSize = 1439
 )
 
-// realmPunchInitialWireLen returns the wire length of the first datagram this
-// client will send, or zero when it cannot be worked out.
+// realmPunchWireLen returns the wire length this client's connection will
+// mostly send at, or zero when it cannot be worked out.
 //
 // Zero is a normal answer, not a failure: gecko pads every datagram to a random
 // size in a configured range, so there is no single length to match, and a
 // caller that cannot name the length is better off with the fallback band than
 // with a confident wrong number.
-func realmPunchInitialWireLen(obfsType string, disableChromeParrot bool, probe net.PacketConn) int {
+func realmPunchWireLen(obfsType string, probe net.PacketConn) int {
 	overhead, ok := obfs.WireOverheadOf(probe)
 	if !ok {
 		return 0
@@ -49,8 +54,5 @@ func realmPunchInitialWireLen(obfsType string, disableChromeParrot bool, probe n
 	default:
 		return 0
 	}
-	if disableChromeParrot {
-		return quicInitialPacketSize + overhead
-	}
-	return quicChromeInitialPacketSize + overhead
+	return quicFullDatagramSize + overhead
 }

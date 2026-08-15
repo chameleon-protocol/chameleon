@@ -52,7 +52,7 @@ const (
 	// The limit of this fallback is measured, not suspected: it overlaps real
 	// traffic instead of forming a band of its own, which is the mistake a fixed
 	// 1250 makes, but it cannot hit the modal length, and an offline-learned
-	// exact-length whitelist catches it at 98% client-to-server under
+	// exact-length whitelist catches it at 97% client-to-server under
 	// salamander v2.
 	//
 	// A responder reaches this band too, in one window: from process start until
@@ -76,9 +76,11 @@ const (
 	// not a property of the band.
 	//
 	// This band is now the last resort rather than the initiator's normal case.
-	// A caller that can work out the length of the datagram it is about to send
-	// passes it as PunchConfig.InitialWireLen and the packets take that instead;
-	// the client does, from the QUIC Initial size and the obfuscator's overhead.
+	// A caller that can name the length its connection will mostly send at
+	// passes it as PunchConfig.PadToWireLen and the packets take that instead;
+	// the client does, from the modal full datagram and the obfuscator's
+	// overhead. Aiming at the handshake's Initial instead was measured and is
+	// worse than the band: an Initial is too rare to be whitelisted.
 	// What still reaches the band is a socket whose length nobody could name: a
 	// responder before its first QUIC datagram, and any obfuscator that pads to
 	// a range rather than by a fixed amount.
@@ -211,13 +213,26 @@ type punchHeader struct {
 }
 
 func EncodePunchPacket(packetType PunchPacketType, meta PunchMetadata, mask PunchMask) ([]byte, error) {
+	wireLen, err := fallbackPunchWireLen()
+	if err != nil {
+		return nil, err
+	}
+	return EncodePunchPacketAt(packetType, meta, mask, wireLen)
+}
+
+// EncodePunchPacketAt encodes a punch packet at a chosen wire length.
+//
+// The length is the whole point of the packet's padding, so it is worth being
+// able to set it from outside: the length a punch packet takes is what decides
+// whether it is distinguishable, and measuring that needs the same control the
+// sender has. An unusable length is an error rather than a clamp.
+func EncodePunchPacketAt(packetType PunchPacketType, meta PunchMetadata, mask PunchMask, wireLen int) ([]byte, error) {
 	key, err := newPunchKey(meta, mask)
 	if err != nil {
 		return nil, err
 	}
-	wireLen, err := fallbackPunchWireLen()
-	if err != nil {
-		return nil, err
+	if !validPunchWireLen(wireLen) {
+		return nil, fmt.Errorf("%w: wire length out of range", ErrInvalidPunchPacket)
 	}
 	return encodePunchPacket(packetType, key, wireLen)
 }

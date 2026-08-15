@@ -230,12 +230,12 @@ func (c *PunchPacketConn) writePunch(p []byte, addr net.Addr) (int, error) {
 
 // sampleWireLen returns a length this socket has recently sent, or the
 // fallback band when it has not sent anything yet.
-func (c *PunchPacketConn) sampleWireLen(initialWireLen int) (int, error) {
+func (c *PunchPacketConn) sampleWireLen(padToWireLen int) (int, error) {
 	if n, ok := c.lengths.sample(); ok {
 		return n, nil
 	}
-	if validPunchWireLen(initialWireLen) {
-		return initialWireLen, nil
+	if validPunchWireLen(padToWireLen) {
+		return padToWireLen, nil
 	}
 	return fallbackPunchWireLen()
 }

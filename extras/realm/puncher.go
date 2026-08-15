@@ -85,7 +85,7 @@ func (p *Puncher) run(ctx context.Context, attemptID string, localAddrs, peerAdd
 		ctx, cancel = mergeCancel(ctx, p.base)
 		defer cancel()
 	}
-	return runPunch(ctx, &demuxPunchTransport{conn: p.conn, events: events, initialWireLen: plan.initialWireLen}, plan)
+	return runPunch(ctx, &demuxPunchTransport{conn: p.conn, events: events, padToWireLen: plan.padToWireLen}, plan)
 }
 
 // mergeCancel returns a context cancelled when either input is.
@@ -103,11 +103,11 @@ func mergeCancel(ctx, other context.Context) (context.Context, context.CancelFun
 type demuxPunchTransport struct {
 	conn           *PunchPacketConn
 	events         <-chan PunchPacketEvent
-	initialWireLen int
+	padToWireLen int
 }
 
 func (t *demuxPunchTransport) send(to netip.AddrPort, packetType PunchPacketType, key punchKey) {
-	sendPunchPacket(t.conn, to, key, packetType, t.initialWireLen)
+	sendPunchPacket(t.conn, to, key, packetType, t.padToWireLen)
 }
 
 func (t *demuxPunchTransport) recvUntil(ctx context.Context, deadline time.Time, _ punchKey) (PunchPacketEvent, bool, error) {

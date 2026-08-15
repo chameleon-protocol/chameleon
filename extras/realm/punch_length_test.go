@@ -189,24 +189,24 @@ func TestPunchLengthSamplerSkipsUnusableLengths(t *testing.T) {
 	}
 }
 
-// An initiator has no sample, but it does know the length of the Initial it is
-// about to send. Given that, every punch packet takes it, so the packets carry
-// the length of the handshake that follows them instead of a band that appears
-// nowhere else on the path.
-func TestPunchPacketTakesTheInitialWireLen(t *testing.T) {
+// An initiator has no sample, but the wiring can name the length its connection
+// will mostly send at. Given that, every punch packet takes it, so the packets
+// sit in the biggest length bucket on the path instead of a band that a
+// classifier trained on the deployment picks out.
+func TestPunchPacketTakesThePadToWireLen(t *testing.T) {
 	rec, conn := newRecordingPunchConn(t)
 	key, err := newPunchKey(testPunchMetadata(), testMask)
 	require.NoError(t, err)
 	peer := netip.MustParseAddrPort("192.0.2.2:4433")
 
-	// 1282 is what a real client sends with the Chrome parrot on and salamander
-	// v2 wrapping it, measured in app/cmd by dialling and looking at the wire.
-	const initial = 1282
+	// 1471 is the modal wire length of a real client under salamander v2, taken
+	// from a capture of a loaded connection where it was 60% of what it sent.
+	const modal = 1471
 	for range 64 {
-		sendPunchPacket(conn, peer, key, PunchPacketHello, initial)
+		sendPunchPacket(conn, peer, key, PunchPacketHello, modal)
 	}
 	for _, n := range rec.written() {
-		assert.Equal(t, initial, n, "a punch packet ignored the length it was given")
+		assert.Equal(t, modal, n, "a punch packet ignored the length it was given")
 	}
 
 	// A sample beats it: a length this socket has sent is better evidence than
@@ -215,7 +215,7 @@ func TestPunchPacketTakesTheInitialWireLen(t *testing.T) {
 	require.NoError(t, err)
 	rec.reset()
 	for range 32 {
-		sendPunchPacket(conn, peer, key, PunchPacketHello, initial)
+		sendPunchPacket(conn, peer, key, PunchPacketHello, modal)
 	}
 	for _, n := range rec.written() {
 		assert.Equal(t, 1471, n, "a sampled length lost to the hint")
@@ -224,7 +224,7 @@ func TestPunchPacketTakesTheInitialWireLen(t *testing.T) {
 
 // A length a punch packet cannot be built at is refused rather than clamped:
 // padding to an impossible target would be worse than the band it replaces.
-func TestPunchPacketRejectsUnusableInitialWireLen(t *testing.T) {
+func TestPunchPacketRejectsUnusablePadToWireLen(t *testing.T) {
 	rec, conn := newRecordingPunchConn(t)
 	key, err := newPunchKey(testPunchMetadata(), testMask)
 	require.NoError(t, err)
@@ -242,23 +242,23 @@ func TestPunchPacketRejectsUnusableInitialWireLen(t *testing.T) {
 	}
 }
 
-// The initiator's path: a bare socket, not a demux. This is the one the 98%
-// measurement was taken on, and the only place the hint can do its job, since
+// The initiator's path: a bare socket, not a demux. This is the one the 97%
+// measurement was taken on, and the only place the target can do its job, since
 // a socket with no demux has no sampler to prefer over it.
-func TestPunchPacketTakesTheInitialWireLenOnABareSocket(t *testing.T) {
+func TestPunchPacketTakesThePadToWireLenOnABareSocket(t *testing.T) {
 	rec := &recordingPacketConn{addr: &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 4433}}
 	key, err := newPunchKey(testPunchMetadata(), testMask)
 	require.NoError(t, err)
 	peer := netip.MustParseAddrPort("192.0.2.2:4433")
 
-	const initial = 1282
+	const modal = 1471
 	for range 64 {
-		sendPunchPacket(rec, peer, key, PunchPacketHello, initial)
+		sendPunchPacket(rec, peer, key, PunchPacketHello, modal)
 	}
 	sent := rec.written()
 	require.Len(t, sent, 64)
 	for _, n := range sent {
-		assert.Equal(t, initial, n, "a bare-socket punch packet ignored the length it was given")
+		assert.Equal(t, modal, n, "a bare-socket punch packet ignored the length it was given")
 	}
 
 	// Without one, it is back to the band that gets caught.

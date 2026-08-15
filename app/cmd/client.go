@@ -881,8 +881,8 @@ func (c *clientConfig) realmConfig(addr *realm.Addr) (*client.Config, error) {
 	// afterwards, so nothing has passed through a length sampler yet. The
 	// obfuscator is built here rather than after the punch so its per-datagram
 	// overhead can be asked for: with it, the punch packets take the length of
-	// the Initial this socket sends the moment punching succeeds, instead of a
-	// band that a length classifier picks out at 98%.
+	// the datagram this connection will mostly send, instead of a band that a
+	// length classifier picks out at 97%.
 	finalConn, err := c.wrapObfs(baseConn)
 	if err != nil {
 		return nil, err
@@ -891,7 +891,7 @@ func (c *clientConfig) realmConfig(addr *realm.Addr) (*client.Config, error) {
 		Timeout:        c.Realm.PunchTimeout,
 		Family:         family,
 		SourcePolicy:   realm.PunchSourceCandidates,
-		InitialWireLen: realmPunchInitialWireLen(c.Obfs.Type, c.QUIC.DisableChromeParrot, finalConn),
+		PadToWireLen: realmPunchWireLen(c.Obfs.Type, finalConn),
 	})
 	if err != nil {
 		return nil, configError{Field: "realm.punch", Err: err}
