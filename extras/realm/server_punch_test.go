@@ -34,7 +34,7 @@ func TestServerPuncherRespondsToHello(t *testing.T) {
 	}()
 
 	time.Sleep(10 * time.Millisecond)
-	hello, err := EncodePunchPacket(PunchPacketHello, meta)
+	hello, err := EncodePunchPacket(PunchPacketHello, meta, testMask)
 	require.NoError(t, err)
 	_, err = client.WriteTo(hello, server.LocalAddr())
 	require.NoError(t, err)
@@ -72,7 +72,7 @@ func TestServerPuncherSendsHelloAndSeesAck(t *testing.T) {
 	hello := readPunchPacketFrom(t, client, meta, PunchPacketHello)
 	assert.Equal(t, PunchPacketHello, hello.Type)
 
-	ack, err := EncodePunchPacket(PunchPacketAck, meta)
+	ack, err := EncodePunchPacket(PunchPacketAck, meta, testMask)
 	require.NoError(t, err)
 	_, err = client.WriteTo(ack, server.LocalAddr())
 	require.NoError(t, err)
@@ -181,7 +181,7 @@ type punchResponse struct {
 func newTestServerPuncher(t *testing.T, ctx context.Context) (net.PacketConn, *PunchPacketConn, *ServerPuncher) {
 	t.Helper()
 	server := listenUDP4(t)
-	wrapped, err := NewPunchPacketConn(server, 8)
+	wrapped, err := NewPunchPacketConn(server, testMask, 8)
 	require.NoError(t, err)
 	puncher, err := NewServerPuncher(ctx, wrapped)
 	require.NoError(t, err)
@@ -198,7 +198,7 @@ func pumpPunchPacketConn(t *testing.T, conn *PunchPacketConn) {
 
 func sendHello(t *testing.T, conn net.PacketConn, serverAddr net.Addr, meta PunchMetadata) {
 	t.Helper()
-	packet, err := EncodePunchPacket(PunchPacketHello, meta)
+	packet, err := EncodePunchPacket(PunchPacketHello, meta, testMask)
 	require.NoError(t, err)
 	_, err = conn.WriteTo(packet, serverAddr)
 	require.NoError(t, err)
@@ -212,7 +212,7 @@ func readPunchPacketFrom(t *testing.T, conn net.PacketConn, meta PunchMetadata, 
 	for {
 		n, _, err := conn.ReadFrom(buf)
 		require.NoError(t, err)
-		packet, err := DecodePunchPacket(buf[:n], meta)
+		packet, err := DecodePunchPacket(buf[:n], meta, testMask)
 		if err != nil {
 			continue
 		}

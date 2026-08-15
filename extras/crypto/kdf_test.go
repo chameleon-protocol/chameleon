@@ -67,11 +67,24 @@ func TestDeriveSubkeySeparatesContexts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	punch, err := DeriveSubkey(root, CtxPunchMask, 32)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if bytes.Equal(c2s, s2c) {
 		t.Error("the two directions share a key; a reflected packet would authenticate")
 	}
 	if bytes.Equal(c2s, padding) || bytes.Equal(s2c, padding) {
 		t.Error("padding shares a key with the obfuscation layer")
+	}
+	// The punch mask rides the same socket as the obfuscator and derives from
+	// the same password, so a shared key there is one keystream over two
+	// formats, one of which has an 8-byte magic as known plaintext.
+	if bytes.Equal(punch, c2s) || bytes.Equal(punch, s2c) {
+		t.Error("the punch mask shares a key with the obfuscation layer")
+	}
+	if bytes.Equal(punch, padding) {
+		t.Error("the punch mask shares a key with the padding layer")
 	}
 }
 

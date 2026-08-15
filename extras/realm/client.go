@@ -50,8 +50,19 @@ type HeartbeatRequest struct {
 }
 
 type PunchMetadata struct {
+	// Nonce identifies the attempt. It travels in the clear through the
+	// rendezvous server but only inside the mask on the wire, where it is the
+	// demux index (see punch.go).
 	Nonce string `json:"nonce"`
-	Obfs  string `json:"obfs"`
+	// Obfs was the per-attempt key that masked punch packets until the envelope
+	// moved to a realm-wide mask key. Nothing derives from it now: a key the
+	// rendezvous server relays is a key the rendezvous server has, and the
+	// receiver cannot use a per-attempt key before it knows which attempt a
+	// packet belongs to. It stays in the request because the rendezvous API is
+	// shared with servers this code does not ship, and dropping a field from a
+	// request they may validate is a change to make deliberately, not as a
+	// side effect of a wire format fix.
+	Obfs string `json:"obfs"`
 }
 
 type ConnectRequest struct {

@@ -4,41 +4,109 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"math/big"
+
+	"github.com/chameleon-protocol/chameleon/extras/v2/crypto"
 )
 
 const (
-	MaxPunchPadding = 1024
-
 	punchSaltLen = 8
-	// punchTagLen is the attempt tag: a per-attempt value derived from the
-	// metadata, sent in the clear so the demux can find the attempt with a map
-	// lookup instead of trial-decrypting every packet against every attempt.
-	// See punchAttemptTag for why that trade is worth making.
-	punchTagLen = 4
-	// Plain punch payload before obfs:
-	// 8-byte magic, 1-byte type, 16-byte nonce, then 0..1024 random padding bytes.
-	punchHeaderLen  = 25
-	punchMinWireLen = punchSaltLen + punchTagLen + punchHeaderLen
-	punchMaxWireLen = punchMinWireLen + MaxPunchPadding
+	// Plain punch header: 8-byte magic, 1-byte type, 16-byte nonce. The whole
+	// header has to fit in one SHA-256 output, see xorPunchHeader.
+	punchHeaderLen  = 8 + 1 + PunchNonceSize
+	punchMinWireLen = punchSaltLen + punchHeaderLen
+	// punchMaxWireLen is the largest datagram that fits an Ethernet MTU without
+	// fragmenting on IPv4: 1500 less 20 bytes of IP header and 8 of UDP.
+	//
+	// It doubles as the ceiling of the length sampler (wireLenSampler.observe),
+	// which is why the arithmetic is worth writing down. quic-go caps its own
+	// packets at MaxPacketBufferSize (1452) and path MTU discovery runs under
+	// the obfuscator, so on a 1500-byte path it converges to 1440 and salamander
+	// v2's 32 bytes bring the wire datagram to exactly 1472. On any path that
+	// fits an Ethernet MTU -- which is what a NAT-traversal path is -- this cap
+	// therefore filters nothing the socket sends.
+	//
+	// Above that it does filter: a path with an MTU of 1516 or more lets quic-go
+	// sit at its own 1452 ceiling, putting 1484 on the wire, and those samples
+	// are dropped. What the sampler keeps there are the smaller datagrams the
+	// connection also sends, which are still lengths that flow produces -- not
+	// novel, just not the modal one. Loopback is the case that reaches it in
+	// practice. Raising the cap to cover it would let a punch packet be built
+	// at a size the next hop may not carry, in exchange for nothing the spike
+	// measured, so the cap stays where the wire puts it.
+	punchMaxWireLen = 1472
+	// MaxPunchPadding is what is left for padding at the largest wire length.
+	MaxPunchPadding = punchMaxWireLen - punchMinWireLen
 
-	// punchTagContext domain-separates the attempt tag from every other value
-	// derived from the punch metadata.
-	punchTagContext = "chameleon/punch-tag-v1"
+	punchMaskKeyLen = 32
+
+	// A punch packet sent before the socket has carried anything else has no
+	// sample to copy. This band covers what such a socket sends next: a QUIC
+	// Initial padded to quic-go's InitialPacketSize (1280) plus whatever the
+	// obfuscator adds (32 bytes for salamander v2), through a full datagram
+	// after path MTU discovery has run (measured at 1439 plain / 1471 obfs).
+	//
+	// The limit of this fallback is measured, not suspected: it overlaps real
+	// traffic instead of forming a band of its own, which is the mistake a fixed
+	// 1250 makes, but it cannot hit the modal length, and an offline-learned
+	// exact-length whitelist catches it at 98% client-to-server under
+	// salamander v2 (tests/spike/discofp).
+	//
+	// A responder reaches this band too, in one window: from process start until
+	// its socket has written a datagram of at least punchMinWireLen. A realm
+	// server writes nothing else before its first QUIC connection exists except
+	// STUN binding requests, and at 20 bytes those are under the floor and never
+	// become samples -- so the first punch response after a restart goes out
+	// here, and only the ones after it copy a real length.
+	// TestPunchResponderFallsBackUntilTheSocketHasSentQUIC pins that window.
+	// The spike measures that band server-to-client at 0% under salamander v2,
+	// but says in the same breath that the 0% is the whitelist crossing its
+	// false-positive threshold on a direction with 66 distinct lengths -- luck,
+	// not a property of the band.
+	//
+	// Closing the window needs the length of the QUIC Initial this socket is
+	// about to send, which is deterministic but known neither here nor to the
+	// code that wires this up; see docs/design/p1-punch-envelope.md.
+	punchFallbackMinLen = 1280
+	punchFallbackMaxLen = punchMaxWireLen
 )
 
 var (
 	ErrInvalidPunchPacket = errors.New("invalid punch packet")
+	// ErrPunchMaskRequired is what a punch attempt without a realm mask key
+	// fails with. There is no unmasked punch format: under obfs.type plain the
+	// best measured envelope still showed 50% (c2s) / 24% (s2c) detection, so
+	// the missing key is a configuration error, never a downgrade.
+	ErrPunchMaskRequired = errors.New("punch requires an obfuscation password")
 
-	// Bumped to v2 with the attempt tag: a v1 packet decodes to a different
-	// layout, so the magic makes the mismatch explicit instead of surfacing as
-	// a nonce mismatch on every packet.
-	punchMagic = [8]byte{'C', 'H', 'R', 'L', 'M', 'v', '2', 0}
+	// v3 drops the clear-text attempt tag and keys the mask off the realm
+	// password instead of the relayed per-attempt key. A v2 packet decodes to a
+	// different layout under a key its sender never had, so the magic makes the
+	// mismatch explicit instead of surfacing as a nonce that matches nobody.
+	punchMagic = [8]byte{'C', 'H', 'R', 'L', 'M', 'v', '3', 0}
 )
+
+// The rejection reasons are built once rather than formatted per packet.
+// Every datagram that is not a punch packet -- which on a server is every QUIC
+// packet, for as long as any attempt is registered -- leaves through one of
+// these, and fmt.Errorf on that path cost 64 B and two allocations per inbound
+// packet (BenchmarkPunchPacketConnReadFrom: 156 ns/op with 2 allocs, 81 ns/op
+// with none). They still wrap ErrInvalidPunchPacket and still carry their text.
+var (
+	errPunchPacketTooShort = fmt.Errorf("%w: packet too short", ErrInvalidPunchPacket)
+	errPunchPacketTooLong  = fmt.Errorf("%w: packet too long", ErrInvalidPunchPacket)
+	errPunchBadMagic       = fmt.Errorf("%w: bad magic", ErrInvalidPunchPacket)
+	errPunchUnknownType    = fmt.Errorf("%w: unknown packet type", ErrInvalidPunchPacket)
+	errPunchNonceMismatch  = fmt.Errorf("%w: nonce mismatch", ErrInvalidPunchPacket)
+)
+
+// The header is masked with a single SHA-256 output, so it must fit in one.
+// A pad repeated over a longer buffer is what salamander v1 died of: with the
+// magic as known plaintext, the repeat would hand an observer the keystream
+// (see extras/obfs/salamander_v2.go).
+var _ [sha256.Size - punchHeaderLen]struct{}
 
 type PunchPacketType byte
 
@@ -52,83 +120,123 @@ type PunchPacket struct {
 	PaddingLength int
 }
 
-// punchKey is the decoded, pre-hashed form of PunchMetadata. Decoding hex and
-// hashing the tag once per attempt instead of once per packet is what keeps the
-// demux cheap when punching runs for the lifetime of the socket.
-type punchKey struct {
-	nonce   []byte
-	obfsKey []byte
-	tag     uint32
+// PunchMask is the realm-wide key that masks punch packets.
+//
+// It is realm-wide rather than per-attempt on purpose: the receiver has to
+// unmask before it knows which attempt a packet belongs to, and a per-attempt
+// key would mean one trial decryption per registered attempt per inbound
+// packet. That cost is attacker-controlled -- anyone who can send UDP to the
+// port triggers it -- and with attempts counted per concurrently connecting
+// client it reaches hundreds. See docs/design/p1-punch-envelope.md.
+//
+// The zero value carries no key and is rejected by every entry point.
+type PunchMask struct {
+	key []byte
 }
 
-func newPunchKey(meta PunchMetadata) (punchKey, error) {
-	nonce, obfsKey, err := decodePunchMetadata(meta)
+// NewPunchMask derives the punch mask key from the obfuscation password.
+//
+// password and realmName are the obfuscator's, not the rendezvous server's:
+// the rendezvous server relays punch metadata verbatim and must not be able to
+// mask or unmask a punch packet. The realm here is the obfs deployment scope
+// (obfs.salamanderV2.realm), which is a different thing from the realm ID in
+// the rendezvous URL.
+//
+// The root key is shared with the obfuscator and the subkey context is not, so
+// the mask is independent of the obfuscation keys derived from the same
+// password. StretchPassword caches, so the Argon2id cost is paid once per
+// process no matter how many times this is called.
+func NewPunchMask(password []byte, realmName string) (PunchMask, error) {
+	root, err := crypto.StretchPassword(password, realmName)
+	if err != nil {
+		return PunchMask{}, err
+	}
+	key, err := crypto.DeriveSubkey(root, crypto.CtxPunchMask, punchMaskKeyLen)
+	if err != nil {
+		return PunchMask{}, err
+	}
+	return PunchMask{key: key}, nil
+}
+
+func (m PunchMask) valid() bool {
+	return len(m.key) == punchMaskKeyLen
+}
+
+func (m PunchMask) equal(other PunchMask) bool {
+	return bytes.Equal(m.key, other.key)
+}
+
+// punchKey is the decoded form of one attempt's punch metadata, plus the realm
+// mask every attempt on the socket shares.
+type punchKey struct {
+	nonce [PunchNonceSize]byte
+	mask  PunchMask
+}
+
+func newPunchKey(meta PunchMetadata, mask PunchMask) (punchKey, error) {
+	if !mask.valid() {
+		return punchKey{}, ErrPunchMaskRequired
+	}
+	nonce, err := decodeHexSize("nonce", meta.Nonce, PunchNonceSize)
 	if err != nil {
 		return punchKey{}, err
 	}
-	return punchKey{
-		nonce:   nonce,
-		obfsKey: obfsKey,
-		tag:     punchAttemptTag(nonce, obfsKey),
-	}, nil
+	key := punchKey{mask: mask}
+	copy(key.nonce[:], nonce)
+	return key, nil
 }
 
-// punchAttemptTag derives the clear-text attempt tag from the punch metadata.
+// punchHeader is what one unmask yields: enough to decide whether the packet is
+// a punch packet at all, and if so which attempt it belongs to.
+type punchHeader struct {
+	packetType PunchPacketType
+	nonce      [PunchNonceSize]byte
+}
+
+func EncodePunchPacket(packetType PunchPacketType, meta PunchMetadata, mask PunchMask) ([]byte, error) {
+	key, err := newPunchKey(meta, mask)
+	if err != nil {
+		return nil, err
+	}
+	wireLen, err := fallbackPunchWireLen()
+	if err != nil {
+		return nil, err
+	}
+	return encodePunchPacket(packetType, key, wireLen)
+}
+
+// encodePunchPacket writes one punch packet of exactly wireLen bytes.
 //
-// It is the one part of the packet that is not masked, which costs some
-// unlinkability: an observer can tell that two packets belong to the same
-// attempt. That is already true from the address pair alone, and the metadata
-// the tag is derived from is relayed in the clear by the rendezvous server
-// anyway (see the package documentation). What it buys is that a packet from an
-// unknown source costs one map lookup rather than one SHA-256 and one compare
-// per in-flight attempt — the difference between a bounded cost and an
-// attacker-controlled multiplier now that punching outlives the handshake.
-func punchAttemptTag(nonce, obfsKey []byte) uint32 {
-	h := sha256.New()
-	_, _ = h.Write([]byte(punchTagContext))
-	_, _ = h.Write(nonce)
-	_, _ = h.Write(obfsKey)
-	return binary.BigEndian.Uint32(h.Sum(nil)[:punchTagLen])
-}
-
-func EncodePunchPacket(packetType PunchPacketType, meta PunchMetadata) ([]byte, error) {
-	key, err := newPunchKey(meta)
-	if err != nil {
-		return nil, err
-	}
-	return encodePunchPacket(packetType, key)
-}
-
-func encodePunchPacket(packetType PunchPacketType, key punchKey) ([]byte, error) {
+// The length is the caller's because it is not ours to randomise: sealing does
+// not hide length, and padding drawn from a distribution of its own is a
+// distinguisher on every packet (uniform [33,1057] was measured at 99-100%
+// detection). The caller is expected to hand over a length this socket has
+// already sent.
+func encodePunchPacket(packetType PunchPacketType, key punchKey, wireLen int) ([]byte, error) {
 	if !validPunchPacketType(packetType) {
-		return nil, fmt.Errorf("%w: unknown packet type", ErrInvalidPunchPacket)
+		return nil, errPunchUnknownType
 	}
-	paddingLength, err := randomPaddingLength()
-	if err != nil {
+	if !key.mask.valid() {
+		return nil, ErrPunchMaskRequired
+	}
+	packet := make([]byte, clampPunchWireLen(wireLen))
+	// Salt and padding are both random, so they are drawn together. The padding
+	// is deliberately not masked: XORing a keystream over random bytes changes
+	// nothing an observer can see, and generating enough keystream to cover a
+	// 1472-byte packet would cost the send path 40-odd SHA-256 blocks.
+	if _, err := rand.Read(packet); err != nil {
 		return nil, err
 	}
-	plain := make([]byte, punchHeaderLen+paddingLength)
-	copy(plain[:len(punchMagic)], punchMagic[:])
-	plain[len(punchMagic)] = byte(packetType)
-	copy(plain[len(punchMagic)+1:punchHeaderLen], key.nonce)
-	if paddingLength > 0 {
-		if _, err := rand.Read(plain[punchHeaderLen:]); err != nil {
-			return nil, err
-		}
-	}
-	packet := make([]byte, punchSaltLen+punchTagLen+len(plain))
-	if _, err := rand.Read(packet[:punchSaltLen]); err != nil {
-		return nil, err
-	}
-	binary.BigEndian.PutUint32(packet[punchSaltLen:punchSaltLen+punchTagLen], key.tag)
-	body := packet[punchSaltLen+punchTagLen:]
-	copy(body, plain)
-	xorPunchPacket(body, key.obfsKey, packet[:punchSaltLen])
+	header := packet[punchSaltLen : punchSaltLen+punchHeaderLen]
+	copy(header, punchMagic[:])
+	header[len(punchMagic)] = byte(packetType)
+	copy(header[len(punchMagic)+1:], key.nonce[:])
+	xorPunchHeader(header, key.mask, packet[:punchSaltLen])
 	return packet, nil
 }
 
-func DecodePunchPacket(packet []byte, meta PunchMetadata) (PunchPacket, error) {
-	key, err := newPunchKey(meta)
+func DecodePunchPacket(packet []byte, meta PunchMetadata, mask PunchMask) (PunchPacket, error) {
+	key, err := newPunchKey(meta, mask)
 	if err != nil {
 		return PunchPacket{}, err
 	}
@@ -136,54 +244,49 @@ func DecodePunchPacket(packet []byte, meta PunchMetadata) (PunchPacket, error) {
 }
 
 func decodePunchPacket(packet []byte, key punchKey) (PunchPacket, error) {
-	tag, ok := punchPacketTag(packet)
-	if !ok {
-		return PunchPacket{}, fmt.Errorf("%w: packet too short", ErrInvalidPunchPacket)
+	header, err := unmaskPunchHeader(packet, key.mask)
+	if err != nil {
+		return PunchPacket{}, err
 	}
-	if len(packet) > punchMaxWireLen {
-		return PunchPacket{}, fmt.Errorf("%w: packet too long", ErrInvalidPunchPacket)
-	}
-	if tag != key.tag {
-		return PunchPacket{}, fmt.Errorf("%w: tag mismatch", ErrInvalidPunchPacket)
-	}
-	salt := packet[:punchSaltLen]
-	plain := append([]byte(nil), packet[punchSaltLen+punchTagLen:]...)
-	xorPunchPacket(plain, key.obfsKey, salt)
-	if !bytes.Equal(plain[:len(punchMagic)], punchMagic[:]) {
-		return PunchPacket{}, fmt.Errorf("%w: bad magic", ErrInvalidPunchPacket)
-	}
-	packetType := PunchPacketType(plain[len(punchMagic)])
-	if !validPunchPacketType(packetType) {
-		return PunchPacket{}, fmt.Errorf("%w: unknown packet type", ErrInvalidPunchPacket)
-	}
-	if !bytes.Equal(plain[len(punchMagic)+1:punchHeaderLen], key.nonce) {
-		return PunchPacket{}, fmt.Errorf("%w: nonce mismatch", ErrInvalidPunchPacket)
+	if header.nonce != key.nonce {
+		return PunchPacket{}, errPunchNonceMismatch
 	}
 	return PunchPacket{
-		Type:          packetType,
-		PaddingLength: len(plain) - punchHeaderLen,
+		Type:          header.packetType,
+		PaddingLength: len(packet) - punchMinWireLen,
 	}, nil
 }
 
-// punchPacketTag reads the attempt tag off the wire. It is the only thing the
-// demux needs before it knows which attempt a packet belongs to.
-func punchPacketTag(packet []byte) (uint32, bool) {
+// unmaskPunchHeader is the entire per-packet cost of the demux: one SHA-256, a
+// magic compare, and a 16-byte nonce to look the attempt up by. It does not
+// depend on how many attempts are registered, which is the whole point of
+// masking with a realm key instead of a per-attempt one.
+//
+// A packet that is not ours fails the magic compare, and an attacker without
+// the realm password cannot produce one that does not.
+func unmaskPunchHeader(packet []byte, mask PunchMask) (punchHeader, error) {
+	if !mask.valid() {
+		return punchHeader{}, ErrPunchMaskRequired
+	}
 	if len(packet) < punchMinWireLen {
-		return 0, false
+		return punchHeader{}, errPunchPacketTooShort
 	}
-	return binary.BigEndian.Uint32(packet[punchSaltLen : punchSaltLen+punchTagLen]), true
-}
-
-func decodePunchMetadata(meta PunchMetadata) (nonce, obfsKey []byte, err error) {
-	nonce, err = decodeHexSize("nonce", meta.Nonce, PunchNonceSize)
-	if err != nil {
-		return nil, nil, err
+	if len(packet) > punchMaxWireLen {
+		return punchHeader{}, errPunchPacketTooLong
 	}
-	obfsKey, err = decodeHexSize("obfs", meta.Obfs, PunchObfsKeySize)
-	if err != nil {
-		return nil, nil, err
+	var header [punchHeaderLen]byte
+	copy(header[:], packet[punchSaltLen:punchMinWireLen])
+	xorPunchHeader(header[:], mask, packet[:punchSaltLen])
+	if !bytes.Equal(header[:len(punchMagic)], punchMagic[:]) {
+		return punchHeader{}, errPunchBadMagic
 	}
-	return nonce, obfsKey, nil
+	packetType := PunchPacketType(header[len(punchMagic)])
+	if !validPunchPacketType(packetType) {
+		return punchHeader{}, errPunchUnknownType
+	}
+	out := punchHeader{packetType: packetType}
+	copy(out.nonce[:], header[len(punchMagic)+1:])
+	return out, nil
 }
 
 func decodeHexSize(name, value string, size int) ([]byte, error) {
@@ -197,21 +300,42 @@ func decodeHexSize(name, value string, size int) ([]byte, error) {
 	return b, nil
 }
 
-func randomPaddingLength() (int, error) {
-	n, err := rand.Int(rand.Reader, big.NewInt(MaxPunchPadding+1))
+func clampPunchWireLen(wireLen int) int {
+	return min(max(wireLen, punchMinWireLen), punchMaxWireLen)
+}
+
+// fallbackPunchWireLen is for a socket with no samples yet. See the comment on
+// punchFallbackMinLen for what it can and cannot do.
+func fallbackPunchWireLen() (int, error) {
+	n, err := randomUint(punchFallbackMaxLen - punchFallbackMinLen + 1)
 	if err != nil {
 		return 0, err
 	}
-	return int(n.Int64()), nil
+	return punchFallbackMinLen + n, nil
 }
 
-func xorPunchPacket(packet, obfsKey, salt []byte) {
+// randomUint returns a value in [0,n). The modulo bias is at most one part in
+// 2^24 for the ranges used here, and nothing this picks is key material.
+func randomUint(n int) (int, error) {
+	if n <= 1 {
+		return 0, nil
+	}
+	var buf [4]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return 0, err
+	}
+	v := uint32(buf[0])<<24 | uint32(buf[1])<<16 | uint32(buf[2])<<8 | uint32(buf[3])
+	return int(v % uint32(n)), nil
+}
+
+func xorPunchHeader(header []byte, mask PunchMask, salt []byte) {
 	h := sha256.New()
-	_, _ = h.Write(obfsKey)
+	_, _ = h.Write(mask.key)
 	_, _ = h.Write(salt)
-	mask := h.Sum(nil)
-	for i := range packet {
-		packet[i] ^= mask[i%len(mask)]
+	var sum [sha256.Size]byte
+	h.Sum(sum[:0])
+	for i := range header {
+		header[i] ^= sum[i]
 	}
 }
 

@@ -28,6 +28,12 @@ const (
 	// short buffer would truncate a data packet, and handing the reader a
 	// truncated packet is worse than never having queued it.
 	pumpBufferSize = 65535
+
+	// wireLenSamples is how many recent outbound lengths the sampler keeps.
+	// It only has to span the mix a QUIC connection sends -- full datagrams,
+	// ack-only datagrams, the occasional short one -- not its history, and a
+	// short window follows path MTU discovery instead of averaging over it.
+	wireLenSamples = 16
 )
 
 var ErrInvalidPunchAttempt = errors.New("invalid punch attempt")
@@ -77,12 +83,24 @@ type PunchPacketConn struct {
 
 	eventBuffer int
 
+	// mask is realm-wide, so one unmask per inbound packet serves every
+	// attempt. Attempts on one socket must share it; AddPunchAttempt takes it
+	// from here rather than from the caller for that reason.
+	mask PunchMask
+
+	// lengths is what punch packets take their wire length from. It sits here
+	// because this conn is the one thing that sees every datagram the socket
+	// sends: on a server it is below the obfuscator, so what it samples is the
+	// length as it goes on the wire.
+	lengths wireLenSampler
+
 	mu       sync.RWMutex
 	attempts map[string]*punchAttempt
-	// byTag indexes attempts by their clear-text tag so an inbound packet costs
-	// one map lookup instead of a trial decryption per in-flight attempt.
-	byTag map[uint32][]*punchAttempt
-	stun  chan STUNPacketEvent
+	// byNonce indexes attempts by the nonce carried in the packet, which is
+	// readable only after the unmask. That costs one hash per inbound packet
+	// and nothing per registered attempt.
+	byNonce map[[PunchNonceSize]byte][]*punchAttempt
+	stun    chan STUNPacketEvent
 
 	pumpMu sync.Mutex
 	pump   atomic.Pointer[pumpState]
@@ -90,9 +108,12 @@ type PunchPacketConn struct {
 	queued atomic.Bool
 }
 
-func NewPunchPacketConn(conn net.PacketConn, eventBuffer int) (*PunchPacketConn, error) {
+func NewPunchPacketConn(conn net.PacketConn, mask PunchMask, eventBuffer int) (*PunchPacketConn, error) {
 	if conn == nil {
 		return nil, fmt.Errorf("%w: conn is nil", ErrInvalidPunchAttempt)
+	}
+	if !mask.valid() {
+		return nil, ErrPunchMaskRequired
 	}
 	if eventBuffer <= 0 {
 		eventBuffer = defaultPunchEventBuffer
@@ -102,8 +123,9 @@ func NewPunchPacketConn(conn net.PacketConn, eventBuffer int) (*PunchPacketConn,
 		PacketConn:  conn,
 		udp:         udp,
 		eventBuffer: eventBuffer,
+		mask:        mask,
 		attempts:    make(map[string]*punchAttempt),
-		byTag:       make(map[uint32][]*punchAttempt),
+		byNonce:     make(map[[PunchNonceSize]byte][]*punchAttempt),
 		stun:        make(chan STUNPacketEvent, eventBuffer),
 		queue:       make(chan queuedPacket, pumpQueueSize),
 	}, nil
@@ -151,7 +173,7 @@ func (c *PunchPacketConn) AddPunchAttempt(id string, meta PunchMetadata) (<-chan
 	if id == "" {
 		return nil, fmt.Errorf("%w: id is required", ErrInvalidPunchAttempt)
 	}
-	key, err := newPunchKey(meta)
+	key, err := newPunchKey(meta, c.mask)
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +188,7 @@ func (c *PunchPacketConn) AddPunchAttempt(id string, meta PunchMetadata) (<-chan
 		return nil, fmt.Errorf("%w: duplicate id", ErrInvalidPunchAttempt)
 	}
 	c.attempts[id] = attempt
-	c.byTag[key.tag] = append(c.byTag[key.tag], attempt)
+	c.byNonce[key.nonce] = append(c.byNonce[key.nonce], attempt)
 	return attempt.events, nil
 }
 
@@ -178,7 +200,7 @@ func (c *PunchPacketConn) RemovePunchAttempt(id string) {
 		return
 	}
 	delete(c.attempts, id)
-	bucket := c.byTag[attempt.key.tag]
+	bucket := c.byNonce[attempt.key.nonce]
 	for i, other := range bucket {
 		if other == attempt {
 			bucket = append(bucket[:i], bucket[i+1:]...)
@@ -186,10 +208,76 @@ func (c *PunchPacketConn) RemovePunchAttempt(id string) {
 		}
 	}
 	if len(bucket) == 0 {
-		delete(c.byTag, attempt.key.tag)
+		delete(c.byNonce, attempt.key.nonce)
 	} else {
-		c.byTag[attempt.key.tag] = bucket
+		c.byNonce[attempt.key.nonce] = bucket
 	}
+}
+
+// WriteTo samples the length of everything that leaves the socket, which is
+// what punch packets are then padded to match. Punch packets themselves go out
+// through writePunch instead, so the sampler never learns from its own output:
+// a punch packet that fed the sampler would make the next one copy it, and the
+// distribution would close over itself instead of following the connection.
+func (c *PunchPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
+	c.lengths.observe(len(p))
+	return c.PacketConn.WriteTo(p, addr)
+}
+
+func (c *PunchPacketConn) writePunch(p []byte, addr net.Addr) (int, error) {
+	return c.PacketConn.WriteTo(p, addr)
+}
+
+// sampleWireLen returns a length this socket has recently sent, or the
+// fallback band when it has not sent anything yet.
+func (c *PunchPacketConn) sampleWireLen() (int, error) {
+	if n, ok := c.lengths.sample(); ok {
+		return n, nil
+	}
+	return fallbackPunchWireLen()
+}
+
+// wireLenSampler keeps a small window of outbound datagram lengths.
+//
+// Reads and writes race by design: the value is a length to imitate, and a
+// sample from a slot that was just overwritten is as good as the one it
+// replaced. Making it exact would put a lock on the send path of every QUIC
+// packet, which is the one place on this conn that cannot afford one.
+type wireLenSampler struct {
+	lens  [wireLenSamples]atomic.Uint32
+	count atomic.Uint64
+}
+
+func (s *wireLenSampler) observe(n int) {
+	// Lengths a punch packet cannot take are no use as samples. Anything below
+	// the header cannot be imitated, and anything above the cap would not fit an
+	// Ethernet MTU; see punchMaxWireLen for why that upper filter is empty on
+	// the paths punching runs over, and what it costs where it is not.
+	//
+	// The floor is why a responder can still fall back: a STUN binding request
+	// is 20 bytes, so a socket that has sent nothing but STUN has no samples.
+	if n < punchMinWireLen || n > punchMaxWireLen {
+		return
+	}
+	i := s.count.Add(1) - 1
+	s.lens[i%wireLenSamples].Store(uint32(n))
+}
+
+func (s *wireLenSampler) sample() (int, bool) {
+	filled := min(s.count.Load(), uint64(wireLenSamples))
+	if filled == 0 {
+		return 0, false
+	}
+	i, err := randomUint(int(filled))
+	if err != nil {
+		return 0, false
+	}
+	n := s.lens[i].Load()
+	if n == 0 {
+		// Only reachable against a concurrent first write to that slot.
+		return 0, false
+	}
+	return int(n), true
 }
 
 // StartPump drains the socket in the background so the demux keeps working
@@ -325,8 +413,14 @@ func (c *PunchPacketConn) decodeSTUNPacket(packet []byte) (STUNPacketEvent, bool
 }
 
 func (c *PunchPacketConn) decodePunchPacket(packet []byte, from net.Addr) (*punchAttempt, PunchPacketEvent, bool) {
-	tag, ok := punchPacketTag(packet)
-	if !ok {
+	if !c.hasAttempts() {
+		// Nothing to route to, so the unmask has no one to serve. This is the
+		// state a server spends most of its life in, and it is the state a
+		// packet flood would arrive in.
+		return nil, PunchPacketEvent{}, false
+	}
+	header, err := unmaskPunchHeader(packet, c.mask)
+	if err != nil {
 		return nil, PunchPacketEvent{}, false
 	}
 	fromAddr, ok := addrToAddrPort(from)
@@ -335,21 +429,27 @@ func (c *PunchPacketConn) decodePunchPacket(packet []byte, from net.Addr) (*punc
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	// The tag is 32 bits of hash over the attempt metadata, so a bucket holds
-	// more than one attempt only on a hash collision. Walking it keeps that
-	// case correct without making the common case cost more than a lookup.
-	for _, attempt := range c.byTag[tag] {
-		punchPacket, err := decodePunchPacket(packet, attempt.key)
-		if err != nil {
-			continue
-		}
-		return attempt, PunchPacketEvent{
-			AttemptID: attempt.id,
-			From:      fromAddr,
-			Packet:    punchPacket,
-		}, true
+	// Attempts that share a nonce are the same attempt on the wire, so the
+	// first registered takes the packet. A bucket never grows past that.
+	bucket := c.byNonce[header.nonce]
+	if len(bucket) == 0 {
+		return nil, PunchPacketEvent{}, false
 	}
-	return nil, PunchPacketEvent{}, false
+	attempt := bucket[0]
+	return attempt, PunchPacketEvent{
+		AttemptID: attempt.id,
+		From:      fromAddr,
+		Packet: PunchPacket{
+			Type:          header.packetType,
+			PaddingLength: len(packet) - punchMinWireLen,
+		},
+	}, true
+}
+
+func (c *PunchPacketConn) hasAttempts() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.attempts) > 0
 }
 
 func isClosed(ch <-chan struct{}) bool {

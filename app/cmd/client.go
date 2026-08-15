@@ -353,6 +353,13 @@ func (c *clientConfig) socketOptions() (*sockopts.SocketOptions, error) {
 	return so, nil
 }
 
+func (c *clientConfig) realmPunchMask() (realm.PunchMask, error) {
+	return realmPunchMask(c.Obfs.Type,
+		c.Obfs.Salamander.Password,
+		c.Obfs.SalamanderV2.Password, c.Obfs.SalamanderV2.Realm,
+		c.Obfs.Gecko.Password)
+}
+
 func (c *clientConfig) wrapObfs(conn net.PacketConn) (net.PacketConn, error) {
 	switch strings.ToLower(c.Obfs.Type) {
 	case "", "plain":
@@ -766,6 +773,12 @@ func (c *clientConfig) realmConfig(addr *realm.Addr) (*client.Config, error) {
 	if err != nil {
 		return nil, configError{Field: "realm.ipMode", Err: err}
 	}
+	// Before the socket: a client that cannot mask its punch packets must fail
+	// here rather than punch in the clear.
+	punchMask, err := c.realmPunchMask()
+	if err != nil {
+		return nil, err
+	}
 	so, err := c.socketOptions()
 	if err != nil {
 		return nil, err
@@ -864,7 +877,12 @@ func (c *clientConfig) realmConfig(addr *realm.Addr) (*client.Config, error) {
 	// The punch peer becomes the QUIC server address, and the rendezvous server
 	// knows the punch metadata, so pin the accepted sources to the candidates
 	// it announced. Authentication still comes from the TLS pin and password.
-	result, err := realm.Punch(ctx, baseConn, localAddrs, peerAddrs, connectResp.PunchMetadata, realm.PunchConfig{
+	// Punching runs on the bare socket, below the obfuscator that wraps it
+	// afterwards, so nothing has passed through a length sampler yet: these
+	// packets take the fallback length band, which is the one part of the
+	// envelope a length classifier still catches (98% measured; see
+	// docs/design/p1-punch-envelope.md).
+	result, err := realm.Punch(ctx, baseConn, punchMask, localAddrs, peerAddrs, connectResp.PunchMetadata, realm.PunchConfig{
 		Timeout:      c.Realm.PunchTimeout,
 		Family:       family,
 		SourcePolicy: realm.PunchSourceCandidates,

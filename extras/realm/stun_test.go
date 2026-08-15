@@ -77,7 +77,7 @@ func TestDiscoverSTUNWithDemux(t *testing.T) {
 	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer conn.Close()
-	wrapped, err := NewPunchPacketConn(conn, 4)
+	wrapped, err := NewPunchPacketConn(conn, testMask, 4)
 	require.NoError(t, err)
 	pumpPunchPacketConn(t, wrapped)
 

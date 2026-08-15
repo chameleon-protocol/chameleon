@@ -20,7 +20,7 @@ func TestPunchCoexistsWithDataPlane(t *testing.T) {
 	meta := testPunchMetadata()
 	local := listenUDP4(t)
 	defer local.Close()
-	demux, err := NewPunchPacketConn(local, 8)
+	demux, err := NewPunchPacketConn(local, testMask, 8)
 	require.NoError(t, err)
 	puncher, err := NewPuncher(demux)
 	require.NoError(t, err)
@@ -78,7 +78,7 @@ func TestPunchOnDemuxConnDoesNotOwnReads(t *testing.T) {
 	meta := testPunchMetadata()
 	local := listenUDP4(t)
 	defer local.Close()
-	demux, err := NewPunchPacketConn(local, 8)
+	demux, err := NewPunchPacketConn(local, testMask, 8)
 	require.NoError(t, err)
 	peer := listenUDP4(t)
 	defer peer.Close()
@@ -103,7 +103,7 @@ func TestPunchOnDemuxConnDoesNotOwnReads(t *testing.T) {
 	defer stopData()
 
 	done := ackOnHello(t, peer, meta)
-	result, err := Punch(context.Background(), demux, []netip.AddrPort{packetConnAddrPort(t, local)},
+	result, err := Punch(context.Background(), demux, testMask, []netip.AddrPort{packetConnAddrPort(t, local)},
 		[]netip.AddrPort{packetConnAddrPort(t, peer)}, meta, PunchConfig{
 			Timeout:  2 * time.Second,
 			Interval: 10 * time.Millisecond,
@@ -120,7 +120,7 @@ func TestPunchPacketConnPumpHandsOverQueuedPackets(t *testing.T) {
 	meta := testPunchMetadata()
 	local := listenUDP4(t)
 	defer local.Close()
-	demux, err := NewPunchPacketConn(local, 4)
+	demux, err := NewPunchPacketConn(local, testMask, 4)
 	require.NoError(t, err)
 	events, err := demux.AddPunchAttempt("attempt-1", meta)
 	require.NoError(t, err)
@@ -128,7 +128,7 @@ func TestPunchPacketConnPumpHandsOverQueuedPackets(t *testing.T) {
 	defer peer.Close()
 
 	demux.StartPump()
-	hello, err := EncodePunchPacket(PunchPacketHello, meta)
+	hello, err := EncodePunchPacket(PunchPacketHello, meta, testMask)
 	require.NoError(t, err)
 	_, err = peer.WriteTo(hello, local.LocalAddr())
 	require.NoError(t, err)
@@ -160,7 +160,7 @@ func TestPunchPacketConnPumpHandsOverQueuedPackets(t *testing.T) {
 func TestPunchPacketConnPumpQueuesFullSizePackets(t *testing.T) {
 	local := listenUDP4(t)
 	defer local.Close()
-	demux, err := NewPunchPacketConn(local, 4)
+	demux, err := NewPunchPacketConn(local, testMask, 4)
 	require.NoError(t, err)
 	peer := listenUDP4(t)
 	defer peer.Close()
@@ -184,7 +184,7 @@ func TestPunchPacketConnPumpQueuesFullSizePackets(t *testing.T) {
 func TestPunchPacketConnStopPumpClearsReadDeadline(t *testing.T) {
 	local := listenUDP4(t)
 	defer local.Close()
-	demux, err := NewPunchPacketConn(local, 4)
+	demux, err := NewPunchPacketConn(local, testMask, 4)
 	require.NoError(t, err)
 	peer := listenUDP4(t)
 	defer peer.Close()
@@ -207,7 +207,7 @@ func TestPunchPacketConnStopPumpClearsReadDeadline(t *testing.T) {
 func TestPuncherRejectsBadAttemptID(t *testing.T) {
 	local := listenUDP4(t)
 	defer local.Close()
-	demux, err := NewPunchPacketConn(local, 4)
+	demux, err := NewPunchPacketConn(local, testMask, 4)
 	require.NoError(t, err)
 	puncher, err := NewPuncher(demux)
 	require.NoError(t, err)
@@ -222,7 +222,7 @@ func TestPuncherRejectsDuplicateAttemptID(t *testing.T) {
 	meta := testPunchMetadata()
 	local := listenUDP4(t)
 	defer local.Close()
-	demux, err := NewPunchPacketConn(local, 4)
+	demux, err := NewPunchPacketConn(local, testMask, 4)
 	require.NoError(t, err)
 	puncher, err := NewPuncher(demux)
 	require.NoError(t, err)
@@ -244,7 +244,7 @@ func TestPuncherReleasesAttemptID(t *testing.T) {
 	meta := testPunchMetadata()
 	local := listenUDP4(t)
 	defer local.Close()
-	demux, err := NewPunchPacketConn(local, 4)
+	demux, err := NewPunchPacketConn(local, testMask, 4)
 	require.NoError(t, err)
 	demux.StartPump()
 	defer demux.StopPump()

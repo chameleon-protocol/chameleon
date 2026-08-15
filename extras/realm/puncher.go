@@ -68,7 +68,9 @@ func (p *Puncher) run(ctx context.Context, attemptID string, localAddrs, peerAdd
 	if attemptID == "" {
 		return PunchResult{}, fmt.Errorf("%w: id is required", ErrInvalidPunchAttempt)
 	}
-	plan, err := newPunchPlan(localAddrs, peerAddrs, meta, config, fallbackPolicy, p.conn.LocalAddr())
+	// The mask is the conn's, not the caller's: it is what the demux will
+	// unmask inbound packets with, so an attempt cannot pick its own.
+	plan, err := newPunchPlan(localAddrs, peerAddrs, meta, p.conn.mask, config, fallbackPolicy, p.conn.LocalAddr())
 	if err != nil {
 		return PunchResult{}, err
 	}

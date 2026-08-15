@@ -24,6 +24,7 @@ const (
 	CtxSalamanderV2C2S  = "chameleon/obfs/salamander-v2/c2s"
 	CtxSalamanderV2S2C  = "chameleon/obfs/salamander-v2/s2c"
 	CtxAppPadding       = "chameleon/protocol/padding-v1"
+	CtxPunchMask        = "chameleon/punch-mask-v1"
 )
 
 // Argon2id parameters for password stretching.
