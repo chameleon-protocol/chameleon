@@ -19,6 +19,7 @@ X%" was not a checkable claim.
 | `metrics/` | Percentiles, throughput, regression arithmetic. |
 | `harness/` | Brings up a core server + client over an impaired link, and measures throughput, latency and failover. `multipath.go` gives one server several candidate addresses. |
 | `e2e/` | End-to-end tests and benchmarks built on the harness. |
+| `spike/` | One-off measurements that exist to settle a design question. Each one names the question in its package comment and the answer in `docs/design/`. |
 
 ## Running
 
