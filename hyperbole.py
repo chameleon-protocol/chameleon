@@ -211,7 +211,7 @@ def get_lib_version():
         with open(CORE_SRC_DIR + "/go.mod") as f:
             for line in f:
                 line = line.strip()
-                if line.startswith("github.com/apernet/quic-go"):
+                if line.startswith("github.com/chameleon-protocol/quic-go"):
                     return line.split(" ")[1].strip()
     except Exception:
         return "Unknown"
