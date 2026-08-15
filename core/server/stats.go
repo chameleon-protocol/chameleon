@@ -34,4 +34,11 @@ type Stats struct {
 	// purpose; a session where every message fails is not, and without the
 	// count it is indistinguishable from a session nobody is using.
 	UDPSessionFeedFailed atomic.Uint64
+
+	// UDPSessionQueueFull counts inbound UDP messages dropped because the
+	// session's send queue was full, i.e. the target is accepting writes more
+	// slowly than the client is sending. Dropping is the correct answer for a
+	// datagram, but it is invisible from both ends: the client sees packets
+	// vanish and the target never learns they existed.
+	UDPSessionQueueFull atomic.Uint64
 }

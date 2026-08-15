@@ -16,6 +16,22 @@ import (
 const (
 	idleCleanupInterval = 1 * time.Second
 	maxSessionACLCache  = 256
+
+	// sessionSendQueueLen is how many inbound messages a session will hold
+	// while its previous write to the target is still in the kernel.
+	//
+	// It exists because the alternative is worse, not because writes are slow.
+	// quic-go hands received datagrams to the application through a queue 128
+	// deep and silently discards anything that does not fit
+	// (datagram_queue.go). Writing to the target from the loop that drains
+	// that queue means every write stalls every session on the connection, and
+	// what overflows is not this session's traffic but somebody else's. One
+	// queue per session moves the drop to the session that caused it.
+	//
+	// 1024 is sized to absorb a burst rather than to buffer a stream: a sender
+	// that stays above the target's drain rate will fill any queue, and past
+	// that point dropping early is what UDP is for.
+	sessionSendQueueLen = 1024
 )
 
 type udpIO interface {
@@ -38,6 +54,7 @@ type udpSessionEntry struct {
 	D            *frag.Defragger
 	Last         *utils.AtomicTime
 	IO           udpIO
+	Stats        *Stats
 
 	DialFunc func(addr string, firstMsgData []byte) (conn UDPConn, actualAddr string, err error)
 	ExitFunc func(err error)
@@ -46,25 +63,75 @@ type udpSessionEntry struct {
 	connLock sync.Mutex
 	closed   bool
 
+	// sendCh carries messages from the connection's single receive loop to this
+	// session's sendLoop. done is closed exactly once, by CloseWithErr, to stop
+	// that loop; sendCh itself is never closed, as the sender is a different
+	// goroutine and would panic on a closed channel.
+	sendCh chan *protocol.UDPMessage
+	done   chan struct{}
+
 	aclCache map[string]error
 }
 
 func newUDPSessionEntry(
-	id uint32, io udpIO,
+	id uint32, io udpIO, stats *Stats,
 	dialFunc func(string, []byte) (UDPConn, string, error),
 	exitFunc func(error),
 ) (e *udpSessionEntry) {
 	e = &udpSessionEntry{
-		ID:   id,
-		D:    frag.NewDefragger(),
-		Last: utils.NewAtomicTime(time.Now()),
-		IO:   io,
+		ID:    id,
+		D:     frag.NewDefragger(),
+		Last:  utils.NewAtomicTime(time.Now()),
+		IO:    io,
+		Stats: stats,
 
 		DialFunc: dialFunc,
 		ExitFunc: exitFunc,
+
+		sendCh: make(chan *protocol.UDPMessage, sessionSendQueueLen),
+		done:   make(chan struct{}),
 	}
+	go e.sendLoop()
 
 	return e
+}
+
+// sendLoop writes queued messages to the session's target. It is the only
+// goroutine that calls Feed, which is what keeps the defragger and the
+// lazily-dialled conn free of locking.
+func (e *udpSessionEntry) sendLoop() {
+	for {
+		select {
+		case <-e.done:
+			return
+		case msg := <-e.sendCh:
+			// Feed errors are per-message and mostly expected (an ACL
+			// rejection, an address that does not resolve). Counting them is
+			// the only way a session that fails every single write looks
+			// different from an idle one.
+			if _, err := e.Feed(msg); err != nil {
+				e.Stats.UDPSessionFeedFailed.Add(1)
+			}
+		}
+	}
+}
+
+// Enqueue hands a message to the session's sendLoop. It never blocks: the
+// caller is the receive loop shared by every session on the connection, and
+// blocking it is what this whole arrangement exists to avoid. A full queue
+// means the target is slower than the sender, and a dropped datagram is the
+// honest answer.
+func (e *udpSessionEntry) Enqueue(msg *protocol.UDPMessage) {
+	// Idle is measured from when a message arrived, not from when it was
+	// written out, so that a session whose target is slow is not also treated
+	// as one nobody is using.
+	e.Last.Set(time.Now())
+	select {
+	case e.sendCh <- msg:
+	case <-e.done:
+	default:
+		e.Stats.UDPSessionQueueFull.Add(1)
+	}
 }
 
 // CloseWithErr closes the session and calls ExitFunc with the given error.
@@ -80,6 +147,7 @@ func (e *udpSessionEntry) CloseWithErr(err error) {
 	}
 
 	e.closed = true
+	close(e.done) // stops sendLoop; the closed guard above makes this once
 	if e.conn != nil {
 		_ = e.conn.Close()
 	}
@@ -341,7 +409,7 @@ func (m *udpSessionManager) feed(msg *protocol.UDPMessage) {
 			m.mutex.Unlock()
 		}
 
-		entry = newUDPSessionEntry(msg.SessionID, m.io, dialFunc, exitFunc)
+		entry = newUDPSessionEntry(msg.SessionID, m.io, m.stats, dialFunc, exitFunc)
 
 		// Insert the session into the map
 		m.mutex.Lock()
@@ -349,14 +417,10 @@ func (m *udpSessionManager) feed(msg *protocol.UDPMessage) {
 		m.mutex.Unlock()
 	}
 
-	// Feed the message to the session
-	// Feed (send) errors are ignored for now,
-	// as some are temporary (e.g. invalid address).
-	// They are still counted: a session that fails every single write looks
-	// exactly like an idle one otherwise.
-	if _, err := entry.Feed(msg); err != nil {
-		m.stats.UDPSessionFeedFailed.Add(1)
-	}
+	// Hand the message to the session's own loop rather than writing it here.
+	// This function runs on the connection's single receive loop, and the write
+	// it used to do was a blocking syscall to an arbitrary internet host.
+	entry.Enqueue(msg)
 }
 
 func (m *udpSessionManager) Count() int {

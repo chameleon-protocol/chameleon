@@ -78,11 +78,16 @@ func TestUDPSessionFeedFailedCounted(t *testing.T) {
 	}).Once()
 	udpConn.EXPECT().WriteTo(msg.Data, msg.Addr).Return(0, errors.New("network unreachable")).Twice()
 
+	// feed hands off to the session's own goroutine, so the count lands shortly
+	// after the call rather than during it.
+	countReaches := func(n uint64) func() bool {
+		return func() bool { return stats.UDPSessionFeedFailed.Load() == n }
+	}
 	sm.feed(msg)
-	assert.EqualValues(t, 1, stats.UDPSessionFeedFailed.Load())
+	require.Eventually(t, countReaches(1), 5*time.Second, time.Millisecond)
 
 	sm.feed(msg)
-	assert.EqualValues(t, 2, stats.UDPSessionFeedFailed.Load())
+	require.Eventually(t, countReaches(2), 5*time.Second, time.Millisecond)
 	require.Equal(t, 1, sm.Count(), "a failing write must not tear the session down")
 
 	eventLogger.EXPECT().Close(msg.SessionID, nil).Return().Once()
