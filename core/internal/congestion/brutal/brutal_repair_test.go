@@ -10,7 +10,7 @@ import (
 	"github.com/chameleon-protocol/quic-go/monotime"
 )
 
-// The acceptance criteria from docs/research/brutal.md that can only be checked
+// The acceptance criteria for the Brutal repairs that can only be checked
 // here. Several of them cannot be checked end to end at all: the tests module
 // cannot import this package, and the one about packet number length is about
 // bytes that header protection hides from the impairment layer.
@@ -50,7 +50,7 @@ const quicGoInitialWindowPackets = 32
 // maxCompensation is the most the ack rate divisor may multiply the send rate
 // by, which is 1/minAckRate. Also written out rather than derived: the design
 // commits to "past 20% loss the compensation is deliberately incomplete", and
-// 1.25x is what that sentence means (docs/research/brutal.md section 3.1).
+// 1.25x is what that sentence means.
 const maxCompensation = 1.25
 
 func chromePNLen(cwndPackets float64) int {
@@ -155,7 +155,6 @@ func TestCwndBoundsQueueing(t *testing.T) {
 	// sender is willing to tolerate before it stops following. Raising
 	// cwndRTTClampK past two has to fail here -- the tolerated queue is what
 	// everyone else behind the bottleneck pays.
-	// See docs/research/brutal.md section 3.2.
 	if got, ceiling := float64(want), 4*bdp; got > ceiling {
 		t.Errorf("the clamped window is %.0f B, %.1f x the BDP at the path minimum; the design's bound is 4x (%.0f B)",
 			got, got/bdp, ceiling)
@@ -256,7 +255,7 @@ func TestCwndSurvivesAPathDelayRise(t *testing.T) {
 //
 // The alternative was pinning the window to the lifetime minimum, which does
 // hold the length still and costs 30% of the declared rate on a path that
-// merely rerouted. See docs/research/brutal.md section 3.7.
+// merely rerouted.
 func TestPacketNumberLengthIsBounded(t *testing.T) {
 	const minRTT = 20 * time.Millisecond
 	rates := []uint64{

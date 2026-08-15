@@ -13,10 +13,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// This file is the P1b spike on the TLS exporter (RFC 5705 / RFC 8446 §7.5).
+// This file covers the TLS exporter (RFC 5705 / RFC 8446 §7.5).
 //
-// docs/design/p1-disco-selector.md keys the disco protocol off a per-connection
-// secret exported from the QUIC handshake:
+// The planned control protocol keys itself off a per-connection secret
+// exported from the QUIC handshake:
 //
 //	discoSecret = conn.ConnectionState().TLS.ExportKeyingMaterial(...)
 //

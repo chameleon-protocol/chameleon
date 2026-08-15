@@ -86,10 +86,10 @@ const (
 	// one flight, and one flight sees one queue state. Five times quic-go's
 	// DefaultInitialRTT (100ms -- the round trip it assumes for a path it has
 	// never measured) is several flights of any path worth switching to. The
-	// ceiling on it is P1's: the switch acceptance criterion measures
-	// throughput over the two seconds after a switch
-	// (docs/design/p1-disco-selector.md, T6), so a window eating more than a
-	// quarter of that would be measured as the regression it exists to prevent.
+	// ceiling on it is the one candidate switching imposes: the acceptance
+	// criterion for a switch measures throughput over the two seconds after
+	// it, so a window eating more than a quarter of that would be measured as
+	// the regression it exists to prevent.
 	//
 	// What settles the value between those bounds is that the two errors are
 	// not symmetric. Too short, and the floor is committed from a queue that
@@ -342,10 +342,9 @@ func (b *BrutalSender) CanSend(bytesInFlight congestion.ByteCount) bool {
 // in that figure, and a declared rate whose window sits near one of Chrome's
 // thresholds (64 packets, 16384) can now cross it as the round trip moves. The
 // unbounded version crossed those thresholds too, and kept going; what is left
-// is one band of movement instead of an open-ended trajectory. See
-// docs/research/brutal.md section 3.7 -- the alternative was keeping a
-// property the controller never fully had at the price of a throughput
-// regression on paths that do nothing wrong.
+// is one band of movement instead of an open-ended trajectory. The alternative
+// was keeping a property the controller never fully had, at the price of a
+// throughput regression on paths that do nothing wrong.
 //
 // The rate is unaffected -- that is the pacer's job, and it still paces at the
 // declared rate. This bounds only how much may be outstanding.
@@ -436,8 +435,8 @@ func (b *BrutalSender) minRTT() time.Duration {
 // alone: a window with no fallback measures the queue it is itself building,
 // and a fallback with no window never stops paying for it.
 //
-// This is not the rolling minimum docs/research/brutal.md section 3.1 rejects,
-// and the difference is the drain. A rolling window as the standing estimator
+// This is not a rolling minimum, and the difference is the drain. A rolling
+// window as the standing estimator
 // is wrong here because Brutal never backs off: on an over-declared path every
 // sample carries the queue, so the window ratchets the estimate -- and the
 // congestion window with it -- up to whatever the standing queue costs. This

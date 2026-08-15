@@ -17,8 +17,7 @@ import (
 // measured, P1's post-switch acceptance window. None of them is read back out
 // of rebaselineWindow or rebaselineMinSamples: an assertion whose expected
 // value comes from the constant under test asserts nothing about it, which is
-// the methodology docs/research/brutal.md section 5 E10 was written to stop
-// this package repeating.
+// the methodology this package has repeated once already and must not again.
 
 const (
 	// oldPathMin is the previous path's lifetime minimum, which is what
@@ -109,8 +108,8 @@ func TestRebaselineCommitsInsideTheSwitchBudget(t *testing.T) {
 	b := newSender(8<<20, false, rtt)
 	b.OnPathChange()
 
-	// P1 accepts a switch on the throughput measured over the two seconds after
-	// it (docs/design/p1-disco-selector.md, T6). Half of that window is the
+	// A candidate switch is accepted on the throughput measured over the two
+	// seconds after it. Half of that window is the
 	// most rebaselining may spend before it is the regression being measured.
 	const budget = time.Second
 	const samples = 40
