@@ -878,13 +878,20 @@ func (c *clientConfig) realmConfig(addr *realm.Addr) (*client.Config, error) {
 	// knows the punch metadata, so pin the accepted sources to the candidates
 	// it announced. Authentication still comes from the TLS pin and password.
 	// Punching runs on the bare socket, below the obfuscator that wraps it
-	// afterwards, so nothing has passed through a length sampler yet: these
-	// packets take the fallback length band, which is the one part of the
-	// envelope a length classifier still catches (98% measured).
+	// afterwards, so nothing has passed through a length sampler yet. The
+	// obfuscator is built here rather than after the punch so its per-datagram
+	// overhead can be asked for: with it, the punch packets take the length of
+	// the Initial this socket sends the moment punching succeeds, instead of a
+	// band that a length classifier picks out at 98%.
+	finalConn, err := c.wrapObfs(baseConn)
+	if err != nil {
+		return nil, err
+	}
 	result, err := realm.Punch(ctx, baseConn, punchMask, localAddrs, peerAddrs, connectResp.PunchMetadata, realm.PunchConfig{
-		Timeout:      c.Realm.PunchTimeout,
-		Family:       family,
-		SourcePolicy: realm.PunchSourceCandidates,
+		Timeout:        c.Realm.PunchTimeout,
+		Family:         family,
+		SourcePolicy:   realm.PunchSourceCandidates,
+		InitialWireLen: realmPunchInitialWireLen(c.Obfs.Type, c.QUIC.DisableChromeParrot, finalConn),
 	})
 	if err != nil {
 		return nil, configError{Field: "realm.punch", Err: err}
@@ -900,10 +907,6 @@ func (c *clientConfig) realmConfig(addr *realm.Addr) (*client.Config, error) {
 		zap.String("realm", addr.RealmID),
 		zap.String("peer", result.PeerAddr.String()))
 
-	finalConn, err := c.wrapObfs(baseConn)
-	if err != nil {
-		return nil, err
-	}
 	if mapper != nil {
 		mapCtx, mapCancel := context.WithCancel(context.Background())
 		go realmPortMapLoop(mapCtx, addr.RealmID, mapper)

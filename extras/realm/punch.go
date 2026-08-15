@@ -75,9 +75,13 @@ const (
 	// false-positive threshold on a direction with 66 distinct lengths -- luck,
 	// not a property of the band.
 	//
-	// Closing the window needs the length of the QUIC Initial this socket is
-	// about to send, which is deterministic but known neither here nor to the
-	// code that wires this up.
+	// This band is now the last resort rather than the initiator's normal case.
+	// A caller that can work out the length of the datagram it is about to send
+	// passes it as PunchConfig.InitialWireLen and the packets take that instead;
+	// the client does, from the QUIC Initial size and the obfuscator's overhead.
+	// What still reaches the band is a socket whose length nobody could name: a
+	// responder before its first QUIC datagram, and any obfuscator that pads to
+	// a range rather than by a fixed amount.
 	punchFallbackMinLen = 1280
 	// Not punchMaxWireLen: that is the sampler's ceiling, set high enough not to
 	// drop a real sample, and drawing from it would put lengths on the wire that
@@ -354,4 +358,13 @@ func xorPunchHeader(header []byte, mask PunchMask, salt []byte) {
 
 func validPunchPacketType(packetType PunchPacketType) bool {
 	return packetType == PunchPacketHello || packetType == PunchPacketAck
+}
+
+// validPunchWireLen reports whether n is a length a punch packet can actually
+// be built at. A caller that works the length out from its own configuration
+// can get it wrong -- a changed constant upstream, an obfuscator with no fixed
+// overhead -- and padding to an impossible length would be worse than the band
+// it replaces, so an unusable value is refused rather than clamped.
+func validPunchWireLen(n int) bool {
+	return n >= punchMinWireLen && n <= punchMaxWireLen
 }

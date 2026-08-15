@@ -69,7 +69,7 @@ func TestPunchPacketLengthComesFromTheSocket(t *testing.T) {
 	rec.reset()
 
 	for range 64 {
-		sendPunchPacket(conn, peer, key, PunchPacketHello)
+		sendPunchPacket(conn, peer, key, PunchPacketHello, 0)
 	}
 	sent := rec.written()
 	require.Len(t, sent, 64)
@@ -92,7 +92,7 @@ func TestPunchPacketsAreNotSamples(t *testing.T) {
 	peer := netip.MustParseAddrPort("192.0.2.2:4433")
 
 	for range 32 {
-		sendPunchPacket(conn, peer, key, PunchPacketHello)
+		sendPunchPacket(conn, peer, key, PunchPacketHello, 0)
 	}
 	require.Len(t, rec.written(), 32)
 	assert.Zero(t, conn.lengths.count.Load(), "punch packets fed the length sampler")
@@ -103,7 +103,7 @@ func TestPunchPacketsAreNotSamples(t *testing.T) {
 	require.NoError(t, err)
 	rec.reset()
 	for range 32 {
-		sendPunchPacket(conn, peer, key, PunchPacketHello)
+		sendPunchPacket(conn, peer, key, PunchPacketHello, 0)
 	}
 	for _, n := range rec.written() {
 		assert.Equal(t, 1471, n)
@@ -135,7 +135,7 @@ func TestPunchResponderFallsBackUntilTheSocketHasSentQUIC(t *testing.T) {
 
 	rec.reset()
 	for range 64 {
-		sendPunchPacket(conn, peer, key, PunchPacketHello)
+		sendPunchPacket(conn, peer, key, PunchPacketHello, 0)
 	}
 	for _, n := range rec.written() {
 		assert.GreaterOrEqual(t, n, punchFallbackMinLen)
@@ -147,7 +147,7 @@ func TestPunchResponderFallsBackUntilTheSocketHasSentQUIC(t *testing.T) {
 	require.NoError(t, err)
 	rec.reset()
 	for range 64 {
-		sendPunchPacket(conn, peer, key, PunchPacketHello)
+		sendPunchPacket(conn, peer, key, PunchPacketHello, 0)
 	}
 	for _, n := range rec.written() {
 		assert.Equal(t, 1471, n, "a responder with a sample still guessed")
@@ -181,10 +181,96 @@ func TestPunchLengthSamplerSkipsUnusableLengths(t *testing.T) {
 
 	rec.reset()
 	for range 16 {
-		sendPunchPacket(conn, peer, key, PunchPacketHello)
+		sendPunchPacket(conn, peer, key, PunchPacketHello, 0)
 	}
 	for _, n := range rec.written() {
 		assert.GreaterOrEqual(t, n, 1200)
 		assert.LessOrEqual(t, n, 1473)
 	}
+}
+
+// An initiator has no sample, but it does know the length of the Initial it is
+// about to send. Given that, every punch packet takes it, so the packets carry
+// the length of the handshake that follows them instead of a band that appears
+// nowhere else on the path.
+func TestPunchPacketTakesTheInitialWireLen(t *testing.T) {
+	rec, conn := newRecordingPunchConn(t)
+	key, err := newPunchKey(testPunchMetadata(), testMask)
+	require.NoError(t, err)
+	peer := netip.MustParseAddrPort("192.0.2.2:4433")
+
+	// 1282 is what a real client sends with the Chrome parrot on and salamander
+	// v2 wrapping it, measured in app/cmd by dialling and looking at the wire.
+	const initial = 1282
+	for range 64 {
+		sendPunchPacket(conn, peer, key, PunchPacketHello, initial)
+	}
+	for _, n := range rec.written() {
+		assert.Equal(t, initial, n, "a punch packet ignored the length it was given")
+	}
+
+	// A sample beats it: a length this socket has sent is better evidence than
+	// one it is about to send.
+	_, err = conn.WriteTo(make([]byte, 1471), rec.addr)
+	require.NoError(t, err)
+	rec.reset()
+	for range 32 {
+		sendPunchPacket(conn, peer, key, PunchPacketHello, initial)
+	}
+	for _, n := range rec.written() {
+		assert.Equal(t, 1471, n, "a sampled length lost to the hint")
+	}
+}
+
+// A length a punch packet cannot be built at is refused rather than clamped:
+// padding to an impossible target would be worse than the band it replaces.
+func TestPunchPacketRejectsUnusableInitialWireLen(t *testing.T) {
+	rec, conn := newRecordingPunchConn(t)
+	key, err := newPunchKey(testPunchMetadata(), testMask)
+	require.NoError(t, err)
+	peer := netip.MustParseAddrPort("192.0.2.2:4433")
+
+	for _, bad := range []int{punchMinWireLen - 1, punchMaxWireLen + 1} {
+		rec.reset()
+		for range 16 {
+			sendPunchPacket(conn, peer, key, PunchPacketHello, bad)
+		}
+		for _, n := range rec.written() {
+			assert.GreaterOrEqual(t, n, punchFallbackMinLen, "unusable hint %d was not refused", bad)
+			assert.LessOrEqual(t, n, punchFallbackMaxLen)
+		}
+	}
+}
+
+// The initiator's path: a bare socket, not a demux. This is the one the 98%
+// measurement was taken on, and the only place the hint can do its job, since
+// a socket with no demux has no sampler to prefer over it.
+func TestPunchPacketTakesTheInitialWireLenOnABareSocket(t *testing.T) {
+	rec := &recordingPacketConn{addr: &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 4433}}
+	key, err := newPunchKey(testPunchMetadata(), testMask)
+	require.NoError(t, err)
+	peer := netip.MustParseAddrPort("192.0.2.2:4433")
+
+	const initial = 1282
+	for range 64 {
+		sendPunchPacket(rec, peer, key, PunchPacketHello, initial)
+	}
+	sent := rec.written()
+	require.Len(t, sent, 64)
+	for _, n := range sent {
+		assert.Equal(t, initial, n, "a bare-socket punch packet ignored the length it was given")
+	}
+
+	// Without one, it is back to the band that gets caught.
+	rec.reset()
+	for range 64 {
+		sendPunchPacket(rec, peer, key, PunchPacketHello, 0)
+	}
+	seen := map[int]struct{}{}
+	for _, n := range rec.written() {
+		assert.GreaterOrEqual(t, n, punchFallbackMinLen)
+		assert.LessOrEqual(t, n, punchFallbackMaxLen)
+		seen[n] = struct{}{}
+	}
+	assert.Greater(t, len(seen), 1, "the fallback stopped varying")
 }

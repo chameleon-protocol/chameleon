@@ -333,3 +333,7 @@ func (r *replaySet) seenOrAdd(salt [smV2SaltLen]byte, now time.Time) bool {
 	r.buckets[r.idx][salt] = struct{}{}
 	return false
 }
+
+// WireOverhead is the constant this obfuscator adds to every datagram: a salt,
+// a timestamp and an AEAD tag.
+func (o *salamanderV2) WireOverhead() int { return smV2Overhead }

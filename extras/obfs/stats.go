@@ -118,3 +118,33 @@ func StatsOf(conn net.PacketConn) *Stats {
 	}
 	return nil
 }
+
+// fixedOverhead is implemented by obfuscators that add the same number of bytes
+// to every datagram. Gecko does not: it pads to a random size in a configured
+// range, so there is no single number to report and it stays out.
+type fixedOverhead interface {
+	WireOverhead() int
+}
+
+// WireOverheadOf returns how many bytes the obfuscation of conn adds to every
+// datagram, and whether that number exists.
+//
+// It exists so a caller can work out the length its next datagram will have on
+// the wire before sending one. Hole punching needs that: it runs on a bare
+// socket before the QUIC handshake, so it has no sent datagram to copy a length
+// from, and a punch packet whose length matches no real traffic is exactly the
+// thing a length classifier looks for.
+func WireOverheadOf(conn net.PacketConn) (int, bool) {
+	c, ok := conn.(*obfsPacketConn)
+	if !ok {
+		if u, isUDP := conn.(*obfsPacketConnUDP); isUDP {
+			c = u.obfsPacketConn
+		} else {
+			return 0, false
+		}
+	}
+	if o, has := c.Obfs.(fixedOverhead); has {
+		return o.WireOverhead(), true
+	}
+	return 0, false
+}
