@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/chameleon-protocol/chameleon/extras/v2/crypto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -69,16 +70,52 @@ func TestPunchPacketRequiresMask(t *testing.T) {
 	require.ErrorIs(t, err, ErrPunchMaskRequired)
 }
 
-// The mask key must not be the obfuscation key itself: the punch layer and the
-// obfuscation layer sit on the same socket, and a shared key there means a
-// keystream reused across two formats.
+// The mask key must not be an obfuscation key: both layers sit on the same
+// socket and derive from the same password, and a shared key there is one
+// keystream serving two formats.
+//
+// Only the derivation context separates them, so the check has to be against
+// the keys the obfuscator actually derives -- same password, same realm, same
+// root -- not against another punch mask. Swapping crypto.CtxPunchMask for
+// crypto.CtxSalamanderV2C2S in NewPunchMask makes the mask bit-identical to the
+// obfuscator's client-to-server subkey, and that is what this fails on.
 func TestPunchMaskIsNotTheObfsKey(t *testing.T) {
-	mask, err := NewPunchMask([]byte("realm-password"), "deployment")
+	const (
+		password  = "realm-password"
+		realmName = "deployment"
+	)
+	mask, err := NewPunchMask([]byte(password), realmName)
 	require.NoError(t, err)
-	other, err := NewPunchMask([]byte("realm-password"), "")
+	require.Len(t, mask.key, punchMaskKeyLen)
+
+	root, err := crypto.StretchPassword([]byte(password), realmName)
 	require.NoError(t, err)
-	assert.NotEqual(t, mask.key, other.key)
-	assert.Len(t, mask.key, punchMaskKeyLen)
+	for _, ctx := range []string{
+		crypto.CtxSalamanderV2C2S,
+		crypto.CtxSalamanderV2S2C,
+		crypto.CtxSalamanderV2Root,
+		crypto.CtxAppPadding,
+	} {
+		obfsKey, err := crypto.DeriveSubkey(root, ctx, punchMaskKeyLen)
+		require.NoError(t, err)
+		assert.NotEqualf(t, obfsKey, mask.key, "the punch mask is the %q subkey", ctx)
+	}
+	// The root itself is not a subkey of anything, so it needs its own compare.
+	assert.NotEqual(t, root[:], mask.key, "the punch mask is the stretched password")
+}
+
+// The realm has to reach the derivation, or two deployments that picked the
+// same obfuscation password would mask their punch packets alike and each could
+// read the other's.
+func TestPunchMaskIsScopedToTheRealm(t *testing.T) {
+	scoped, err := NewPunchMask([]byte("realm-password"), "deployment")
+	require.NoError(t, err)
+	elsewhere, err := NewPunchMask([]byte("realm-password"), "elsewhere")
+	require.NoError(t, err)
+	unscoped, err := NewPunchMask([]byte("realm-password"), "")
+	require.NoError(t, err)
+	assert.NotEqual(t, scoped.key, elsewhere.key)
+	assert.NotEqual(t, scoped.key, unscoped.key)
 }
 
 func TestPunchPacketSaltVariesWireBytes(t *testing.T) {
@@ -98,15 +135,24 @@ func TestPunchPacketSaltVariesWireBytes(t *testing.T) {
 // made "some 4-byte value at offset 8 repeats three times" a complete detector
 // at 100% / 0.00% false positives (docs/design/p1-punch-envelope.md).
 //
-// Uniformly random bytes put the expected modal count at one per offset over
-// 256 packets; a constant field puts it at 256. The threshold sits far from
-// both, so this fails on any offset that keeps a value across packets and does
-// not flake on the random tail.
+// The threshold is a multiple-comparison bound, not a feel. Each of the
+// wireLen*256 = 307200 (offset, value) cells holds a Binomial(256, 1/256) count
+// over uniformly random bytes -- mean 1 -- and the test fails if any one of
+// them exceeds maxRepeat. At maxRepeat=10 the per-cell tail is 8.4e-9, so a run
+// trips on the random tail with probability 2.6e-3: measured at 2 failures in
+// 400 runs, which is where this number came from. At 20 the tail is 8.0e-20 and
+// the per-run figure is 2.4e-14.
+//
+// Raising the bound costs almost no detection power, because what it is looking
+// for is not near it. A field that is constant across the attempt sits at 256
+// of 256, and so does one that is merely mask-independent: dropping
+// xorPunchHeader leaves the magic in the clear at 256, and a zeroed salt makes
+// the whole masked header constant at 256.
 func TestPunchPacketRepeatsNoBytes(t *testing.T) {
 	const (
 		packets   = 256
 		wireLen   = 1200
-		maxRepeat = 10
+		maxRepeat = 20
 	)
 	key, err := newPunchKey(testPunchMetadata(), testMask)
 	require.NoError(t, err)
@@ -188,21 +234,32 @@ func TestPunchPacketRejectsBadMetadata(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrInvalidPunchPacket))
 }
 
-// Without a sample the length is a guess, and the only thing worth pinning is
-// that it is not a band of its own. The bounds are external facts, not this
-// package's constants: 1200 is the smallest datagram a QUIC endpoint may send
-// an Initial in (RFC 9000 §14.1), 1472 is what fits an Ethernet MTU over IPv4,
-// and [33,1057] is the range the uniform padding this replaces produced, which
-// was measured at 99-100% detection on wire length alone.
+// Without a sample the length is a guess, and two things are worth pinning: it
+// is not a band of its own, and it is not a single length either. The bounds
+// are external facts, not this package's constants: 1200 is the smallest
+// datagram a QUIC endpoint may send an Initial in (RFC 9000 §14.1), 1472 is
+// what fits an Ethernet MTU over IPv4, and [33,1057] is the range the uniform
+// padding this replaces produced, which was measured at 99-100% detection on
+// wire length alone.
+//
+// The second assertion is the one the predecessor test carried and this one
+// nearly lost. A fallback that returns a constant is the fixed-target mistake
+// the design rejects by name -- 1250 was measured as a beacon -- and every
+// bound above still holds while it happens, so only the count of distinct
+// lengths catches it. Over 256 draws from a 193-wide band, seeing one length is
+// a 193^-255 event.
 func TestPunchPacketFallbackLengthLandsInTheQUICBand(t *testing.T) {
 	meta := testPunchMetadata()
 	mask := testMask
+	seen := map[int]struct{}{}
 	for range 256 {
 		packet, err := EncodePunchPacket(PunchPacketHello, meta, mask)
 		require.NoError(t, err)
 		assert.GreaterOrEqual(t, len(packet), 1200)
 		assert.LessOrEqual(t, len(packet), 1472)
+		seen[len(packet)] = struct{}{}
 	}
+	assert.Greater(t, len(seen), 1, "every fallback packet came out the same length")
 }
 
 func testPunchMetadata() PunchMetadata {

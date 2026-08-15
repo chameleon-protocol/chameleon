@@ -18,10 +18,24 @@ const (
 	punchHeaderLen  = 8 + 1 + PunchNonceSize
 	punchMinWireLen = punchSaltLen + punchHeaderLen
 	// punchMaxWireLen is the largest datagram that fits an Ethernet MTU without
-	// fragmenting on IPv4. Punch packets take their length from the packets the
-	// socket is already sending (see PunchPacketConn.sampleWireLen), and those
-	// come out of path MTU discovery, so this only has to be an upper bound on
-	// what the socket can legitimately send.
+	// fragmenting on IPv4: 1500 less 20 bytes of IP header and 8 of UDP.
+	//
+	// It doubles as the ceiling of the length sampler (wireLenSampler.observe),
+	// which is why the arithmetic is worth writing down. quic-go caps its own
+	// packets at MaxPacketBufferSize (1452) and path MTU discovery runs under
+	// the obfuscator, so on a 1500-byte path it converges to 1440 and salamander
+	// v2's 32 bytes bring the wire datagram to exactly 1472. On any path that
+	// fits an Ethernet MTU -- which is what a NAT-traversal path is -- this cap
+	// therefore filters nothing the socket sends.
+	//
+	// Above that it does filter: a path with an MTU of 1516 or more lets quic-go
+	// sit at its own 1452 ceiling, putting 1484 on the wire, and those samples
+	// are dropped. What the sampler keeps there are the smaller datagrams the
+	// connection also sends, which are still lengths that flow produces -- not
+	// novel, just not the modal one. Loopback is the case that reaches it in
+	// practice. Raising the cap to cover it would let a punch packet be built
+	// at a size the next hop may not carry, in exchange for nothing the spike
+	// measured, so the cap stays where the wire puts it.
 	punchMaxWireLen = 1472
 	// MaxPunchPadding is what is left for padding at the largest wire length.
 	MaxPunchPadding = punchMaxWireLen - punchMinWireLen
@@ -38,11 +52,23 @@ const (
 	// traffic instead of forming a band of its own, which is the mistake a fixed
 	// 1250 makes, but it cannot hit the modal length, and an offline-learned
 	// exact-length whitelist catches it at 98% client-to-server under
-	// salamander v2 (tests/spike/discofp). A responder, whose packets copy a
-	// sampled length, is at 0%. Closing the gap needs the length of the QUIC
-	// Initial this socket is about to send, which is deterministic but known
-	// neither here nor to the code that wires this up; see
-	// docs/design/p1-punch-envelope.md.
+	// salamander v2 (tests/spike/discofp).
+	//
+	// A responder reaches this band too, in one window: from process start until
+	// its socket has written a datagram of at least punchMinWireLen. A realm
+	// server writes nothing else before its first QUIC connection exists except
+	// STUN binding requests, and at 20 bytes those are under the floor and never
+	// become samples -- so the first punch response after a restart goes out
+	// here, and only the ones after it copy a real length.
+	// TestPunchResponderFallsBackUntilTheSocketHasSentQUIC pins that window.
+	// The spike measures that band server-to-client at 0% under salamander v2,
+	// but says in the same breath that the 0% is the whitelist crossing its
+	// false-positive threshold on a direction with 66 distinct lengths -- luck,
+	// not a property of the band.
+	//
+	// Closing the window needs the length of the QUIC Initial this socket is
+	// about to send, which is deterministic but known neither here nor to the
+	// code that wires this up; see docs/design/p1-punch-envelope.md.
 	punchFallbackMinLen = 1280
 	punchFallbackMaxLen = punchMaxWireLen
 )
@@ -60,6 +86,20 @@ var (
 	// different layout under a key its sender never had, so the magic makes the
 	// mismatch explicit instead of surfacing as a nonce that matches nobody.
 	punchMagic = [8]byte{'C', 'H', 'R', 'L', 'M', 'v', '3', 0}
+)
+
+// The rejection reasons are built once rather than formatted per packet.
+// Every datagram that is not a punch packet -- which on a server is every QUIC
+// packet, for as long as any attempt is registered -- leaves through one of
+// these, and fmt.Errorf on that path cost 64 B and two allocations per inbound
+// packet (BenchmarkPunchPacketConnReadFrom: 156 ns/op with 2 allocs, 81 ns/op
+// with none). They still wrap ErrInvalidPunchPacket and still carry their text.
+var (
+	errPunchPacketTooShort = fmt.Errorf("%w: packet too short", ErrInvalidPunchPacket)
+	errPunchPacketTooLong  = fmt.Errorf("%w: packet too long", ErrInvalidPunchPacket)
+	errPunchBadMagic       = fmt.Errorf("%w: bad magic", ErrInvalidPunchPacket)
+	errPunchUnknownType    = fmt.Errorf("%w: unknown packet type", ErrInvalidPunchPacket)
+	errPunchNonceMismatch  = fmt.Errorf("%w: nonce mismatch", ErrInvalidPunchPacket)
 )
 
 // The header is masked with a single SHA-256 output, so it must fit in one.
@@ -174,7 +214,7 @@ func EncodePunchPacket(packetType PunchPacketType, meta PunchMetadata, mask Punc
 // already sent.
 func encodePunchPacket(packetType PunchPacketType, key punchKey, wireLen int) ([]byte, error) {
 	if !validPunchPacketType(packetType) {
-		return nil, fmt.Errorf("%w: unknown packet type", ErrInvalidPunchPacket)
+		return nil, errPunchUnknownType
 	}
 	if !key.mask.valid() {
 		return nil, ErrPunchMaskRequired
@@ -209,7 +249,7 @@ func decodePunchPacket(packet []byte, key punchKey) (PunchPacket, error) {
 		return PunchPacket{}, err
 	}
 	if header.nonce != key.nonce {
-		return PunchPacket{}, fmt.Errorf("%w: nonce mismatch", ErrInvalidPunchPacket)
+		return PunchPacket{}, errPunchNonceMismatch
 	}
 	return PunchPacket{
 		Type:          header.packetType,
@@ -229,20 +269,20 @@ func unmaskPunchHeader(packet []byte, mask PunchMask) (punchHeader, error) {
 		return punchHeader{}, ErrPunchMaskRequired
 	}
 	if len(packet) < punchMinWireLen {
-		return punchHeader{}, fmt.Errorf("%w: packet too short", ErrInvalidPunchPacket)
+		return punchHeader{}, errPunchPacketTooShort
 	}
 	if len(packet) > punchMaxWireLen {
-		return punchHeader{}, fmt.Errorf("%w: packet too long", ErrInvalidPunchPacket)
+		return punchHeader{}, errPunchPacketTooLong
 	}
 	var header [punchHeaderLen]byte
 	copy(header[:], packet[punchSaltLen:punchMinWireLen])
 	xorPunchHeader(header[:], mask, packet[:punchSaltLen])
 	if !bytes.Equal(header[:len(punchMagic)], punchMagic[:]) {
-		return punchHeader{}, fmt.Errorf("%w: bad magic", ErrInvalidPunchPacket)
+		return punchHeader{}, errPunchBadMagic
 	}
 	packetType := PunchPacketType(header[len(punchMagic)])
 	if !validPunchPacketType(packetType) {
-		return punchHeader{}, fmt.Errorf("%w: unknown packet type", ErrInvalidPunchPacket)
+		return punchHeader{}, errPunchUnknownType
 	}
 	out := punchHeader{packetType: packetType}
 	copy(out.nonce[:], header[len(punchMagic)+1:])

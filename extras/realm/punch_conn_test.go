@@ -275,6 +275,39 @@ func quicLikePayload(size int) []byte {
 	return p
 }
 
+// Every datagram that is not a punch packet leaves the demux through a
+// rejection, and on a server with one attempt registered that is every QUIC
+// packet on the socket. Building those errors with fmt.Errorf put 64 bytes and
+// two allocations on that path, which is a garbage rate an attacker sets by
+// spraying; the rejections are package-level values for that reason.
+//
+// The three cases are the three ways a real packet is turned away: below the
+// header, above the MTU, and the right size but not ours.
+func TestPunchDemuxRejectsWithoutAllocating(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		payload []byte
+	}{
+		{"short", quicLikePayload(punchMinWireLen - 1)},
+		{"long", quicLikePayload(punchMaxWireLen + 1)},
+		{"quic", quicLikePayload(1200)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			underlying := &memPacketConn{payload: tc.payload, addr: &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 4433}}
+			conn, err := NewPunchPacketConn(underlying, testMask, 1)
+			require.NoError(t, err)
+			addPunchAttempts(t, conn, 1)
+			buf := make([]byte, 1500)
+			allocs := testing.AllocsPerRun(1000, func() {
+				if _, _, err := conn.ReadFrom(buf); err != nil {
+					t.Fatal(err)
+				}
+			})
+			assert.Zero(t, allocs, "the demux allocated on the reject path")
+		})
+	}
+}
+
 // BenchmarkBaselineReadFrom is the underlying memPacketConn alone, for a
 // reference number to subtract from the wrapped benchmarks.
 func BenchmarkBaselineReadFrom(b *testing.B) {
@@ -445,7 +478,12 @@ func BenchmarkPunchPacketConnReadFrom(b *testing.B) {
 // The numbers that matter are the differences between rows: a version that
 // trial-decrypts per attempt ran 26 ns / 128 ns / 6.6 us / 96 us across
 // 0/1/64/1024 attempts, against a ~1 us baseline for the rest of the receive
-// path. See docs/design/p1-punch-envelope.md.
+// path. That version was never merged, and it is not what this replaces --
+// the format before this one indexed attempts by a clear-text tag and was
+// already flat. The cost against that one is +47 ns per inbound packet, which
+// BenchmarkPunchPacketConnReadFrom measures on an identical payload; this one
+// cannot, because the two formats pad from different ranges. See
+// docs/design/p1-punch-envelope.md.
 func BenchmarkPunchPacketConnReadFromSprayed(b *testing.B) {
 	for _, attempts := range []int{0, 1, 64, 1024} {
 		b.Run(fmt.Sprintf("attempts=%d", attempts), func(b *testing.B) {

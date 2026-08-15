@@ -250,8 +250,12 @@ type wireLenSampler struct {
 
 func (s *wireLenSampler) observe(n int) {
 	// Lengths a punch packet cannot take are no use as samples. Anything below
-	// the header cannot be imitated, and anything above the cap is a datagram
-	// this conn did not put on a path-MTU-sized wire.
+	// the header cannot be imitated, and anything above the cap would not fit an
+	// Ethernet MTU; see punchMaxWireLen for why that upper filter is empty on
+	// the paths punching runs over, and what it costs where it is not.
+	//
+	// The floor is why a responder can still fall back: a STUN binding request
+	// is 20 bytes, so a socket that has sent nothing but STUN has no samples.
 	if n < punchMinWireLen || n > punchMaxWireLen {
 		return
 	}

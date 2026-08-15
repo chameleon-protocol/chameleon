@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pion/stun/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -106,6 +107,50 @@ func TestPunchPacketsAreNotSamples(t *testing.T) {
 	}
 	for _, n := range rec.written() {
 		assert.Equal(t, 1471, n)
+	}
+}
+
+// The responder is not exempt from the fallback, and the code comments say
+// where it is not: a realm server's socket writes nothing but STUN binding
+// requests until its first QUIC connection exists, and a binding request is 20
+// bytes, well under punchMinWireLen. So the first punch response after a
+// restart is padded to a guess, exactly like an initiator's, and the design
+// document must not claim the responder is at 0% without saying so.
+//
+// This pins the window rather than the fix. Once one real datagram has gone
+// out, the fallback is unreachable.
+func TestPunchResponderFallsBackUntilTheSocketHasSentQUIC(t *testing.T) {
+	rec, conn := newRecordingPunchConn(t)
+	key, err := newPunchKey(testPunchMetadata(), testMask)
+	require.NoError(t, err)
+	peer := netip.MustParseAddrPort("192.0.2.2:4433")
+
+	// What a responder has sent before any client reaches it: STUN, and the
+	// binding request is the smallest of it.
+	req := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+	require.Len(t, req.Raw, 20)
+	_, err = conn.WriteTo(req.Raw, rec.addr)
+	require.NoError(t, err)
+	assert.Zero(t, conn.lengths.count.Load(), "a STUN binding request became a length sample")
+
+	rec.reset()
+	for range 64 {
+		sendPunchPacket(conn, peer, key, PunchPacketHello)
+	}
+	for _, n := range rec.written() {
+		assert.GreaterOrEqual(t, n, punchFallbackMinLen)
+		assert.LessOrEqual(t, n, punchFallbackMaxLen)
+	}
+
+	// One QUIC datagram closes the window for good.
+	_, err = conn.WriteTo(make([]byte, 1471), rec.addr)
+	require.NoError(t, err)
+	rec.reset()
+	for range 64 {
+		sendPunchPacket(conn, peer, key, PunchPacketHello)
+	}
+	for _, n := range rec.written() {
+		assert.Equal(t, 1471, n, "a responder with a sample still guessed")
 	}
 }
 
