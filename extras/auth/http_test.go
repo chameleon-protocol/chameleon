@@ -16,7 +16,22 @@ func TestHTTPAuthenticator(t *testing.T) {
 	assert.NoError(t, err)
 	defer cmd.Process.Kill()
 
-	time.Sleep(1 * time.Second) // Wait for the server to start
+	// Wait for the server to start. A fixed sleep here was long enough when
+	// this package ran alone and not when the whole module's tests run in
+	// parallel, which made this test fail for reasons that had nothing to do
+	// with authentication.
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		conn, dialErr := net.DialTimeout("tcp", "127.0.0.1:5000", time.Second)
+		if dialErr == nil {
+			_ = conn.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("test auth server never came up: %v", dialErr)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 
 	auth := NewHTTPAuthenticator("http://127.0.0.1:5000/auth", false)
 

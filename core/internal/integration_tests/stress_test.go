@@ -79,7 +79,15 @@ func (s *udpStressor) Run(t *testing.T) {
 
 	// Due to UDP's unreliability, we need to limit the rate of sending
 	// to reduce packet loss. This is hardcoded to 1 MiB/s for now.
-	limiter := rate.NewLimiter(1048576, 1048576)
+	//
+	// The burst is one packet, not one second's worth. With a burst of 1 MiB
+	// the limiter never engaged for any case below 1 MiB total -- including
+	// "Single 1000x100b", which sends 100 KiB -- so the packets went out as
+	// fast as the loop could push them and the rate above meant nothing.
+	// Datagrams have no retransmission and quic-go's receive queue holds 128,
+	// so an unpaced burst of 1000 loses ~30% on a fast host and the case
+	// deadlocks against its own 20% tolerance.
+	limiter := rate.NewLimiter(1048576, s.Size)
 
 	// Run iterations
 	for i := 0; i < s.Iterations; i++ {
