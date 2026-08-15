@@ -879,7 +879,9 @@ func (c *clientConfig) realmConfig(addr *realm.Addr) (*client.Config, error) {
 	// it announced. Authentication still comes from the TLS pin and password.
 	// Punching runs on the bare socket, below the obfuscator that wraps it
 	// afterwards, so nothing has passed through a length sampler yet: these
-	// packets take the fallback length band. See punchFallbackMinLen.
+	// packets take the fallback length band, which is the one part of the
+	// envelope a length classifier still catches (98% measured; see
+	// docs/design/p1-punch-envelope.md).
 	result, err := realm.Punch(ctx, baseConn, punchMask, localAddrs, peerAddrs, connectResp.PunchMetadata, realm.PunchConfig{
 		Timeout:      c.Realm.PunchTimeout,
 		Family:       family,

@@ -34,13 +34,15 @@ const (
 	// obfuscator adds (32 bytes for salamander v2), through a full datagram
 	// after path MTU discovery has run (measured at 1439 plain / 1471 obfs).
 	//
-	// The limit of this fallback should be stated plainly: it overlaps real
+	// The limit of this fallback is measured, not suspected: it overlaps real
 	// traffic instead of forming a band of its own, which is the mistake a fixed
-	// 1250 makes, but it cannot hit the modal length, so a classifier that has
-	// learned this deployment's exact lengths offline still flags these packets.
-	// Only a sample fixes that, and the initiator has none before its first QUIC
-	// packet -- it punches on a bare socket, so nothing has passed through the
-	// sampler yet.
+	// 1250 makes, but it cannot hit the modal length, and an offline-learned
+	// exact-length whitelist catches it at 98% client-to-server under
+	// salamander v2 (tests/spike/discofp). A responder, whose packets copy a
+	// sampled length, is at 0%. Closing the gap needs the length of the QUIC
+	// Initial this socket is about to send, which is deterministic but known
+	// neither here nor to the code that wires this up; see
+	// docs/design/p1-punch-envelope.md.
 	punchFallbackMinLen = 1280
 	punchFallbackMaxLen = punchMaxWireLen
 )
