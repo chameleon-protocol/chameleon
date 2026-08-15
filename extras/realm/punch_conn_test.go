@@ -482,8 +482,7 @@ func BenchmarkPunchPacketConnReadFrom(b *testing.B) {
 // the format before this one indexed attempts by a clear-text tag and was
 // already flat. The cost against that one is +47 ns per inbound packet, which
 // BenchmarkPunchPacketConnReadFrom measures on an identical payload; this one
-// cannot, because the two formats pad from different ranges. See
-// docs/design/p1-punch-envelope.md.
+// cannot, because the two formats pad from different ranges.
 func BenchmarkPunchPacketConnReadFromSprayed(b *testing.B) {
 	for _, attempts := range []int{0, 1, 64, 1024} {
 		b.Run(fmt.Sprintf("attempts=%d", attempts), func(b *testing.B) {

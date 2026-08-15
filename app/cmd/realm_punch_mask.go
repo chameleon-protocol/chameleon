@@ -10,8 +10,7 @@ import (
 // errRealmPunchNeedsObfs is a startup failure, not a downgrade. Punch packets
 // share a five-tuple with the QUIC connection, and under obfs.type plain there
 // is no envelope that hides in that flow: the best measured candidate still
-// showed 50% detection client-to-server and 24% server-to-client
-// (tests/spike/discofp, docs/design/p1-punch-envelope.md). A realm listener
+// showed 50% detection client-to-server and 24% server-to-client. A realm listener
 // that came up anyway would be handing the operator a connection that works and
 // is trivially fingerprinted, which is worse than one that refuses to start.
 var errRealmPunchNeedsObfs = errors.New(

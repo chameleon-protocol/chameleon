@@ -26,8 +26,7 @@
 // SHA-256 no matter how many attempts are registered. An earlier version put a
 // four-byte attempt tag in the clear for that lookup and it was measured at 100%
 // detection on the first packet; trial-decrypting per attempt instead would have
-// made the cost an attacker's to multiply. docs/design/p1-punch-envelope.md has
-// the measurements and why neither alternative was shipped.
+// made the cost an attacker's to multiply.
 //
 // # Trust model
 //

@@ -18,8 +18,7 @@ import (
 //
 // They exist to pin down what must not change when Brutal is repaired: it is a
 // controller whose whole point is to send at the declared rate and not back off
-// for loss. A fix that trades that away for politeness has broken it. What the
-// numbers here can be compared against afterwards is in docs/research/brutal.md.
+// for loss. A fix that trades that away for politeness has broken it.
 
 // brutalResult is what one run of the load pattern produced.
 type brutalResult struct {

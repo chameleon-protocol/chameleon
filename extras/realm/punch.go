@@ -53,7 +53,7 @@ const (
 	// traffic instead of forming a band of its own, which is the mistake a fixed
 	// 1250 makes, but it cannot hit the modal length, and an offline-learned
 	// exact-length whitelist catches it at 98% client-to-server under
-	// salamander v2 (tests/spike/discofp).
+	// salamander v2.
 	//
 	// A responder reaches this band too, in one window: from process start until
 	// its socket has written a datagram of at least punchMinWireLen. A realm
@@ -77,7 +77,7 @@ const (
 	//
 	// Closing the window needs the length of the QUIC Initial this socket is
 	// about to send, which is deterministic but known neither here nor to the
-	// code that wires this up; see docs/design/p1-punch-envelope.md.
+	// code that wires this up.
 	punchFallbackMinLen = 1280
 	// Not punchMaxWireLen: that is the sampler's ceiling, set high enough not to
 	// drop a real sample, and drawing from it would put lengths on the wire that
@@ -140,7 +140,7 @@ type PunchPacket struct {
 // key would mean one trial decryption per registered attempt per inbound
 // packet. That cost is attacker-controlled -- anyone who can send UDP to the
 // port triggers it -- and with attempts counted per concurrently connecting
-// client it reaches hundreds. See docs/design/p1-punch-envelope.md.
+// client it reaches hundreds.
 //
 // The zero value carries no key and is rejected by every entry point.
 type PunchMask struct {

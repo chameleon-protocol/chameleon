@@ -13,7 +13,7 @@ import (
 	"github.com/chameleon-protocol/chameleon/tests/v2/netem"
 )
 
-// The end-to-end half of the acceptance criteria in docs/research/brutal.md.
+// The end-to-end half of the acceptance criteria for the Brutal repairs.
 // The rest are in the brutal package itself, because the two things that decide
 // this controller's behaviour -- the ack rate and the congestion window -- are
 // internal to the core and this module cannot import them.
@@ -100,8 +100,7 @@ func TestBrutalRunsOnShortPaths(t *testing.T) {
 // The 3x rise is chosen because it is the edge of the envelope: with a clamp of
 // K the sender stays rate-bound while the round trip is inside 2K x minRTT, so
 // K = 2 tolerates 4x and is asserted at 3x with room to spare. A path that
-// stretches further than that does lose rate, and that is the trade -- see
-// docs/research/brutal.md section 3.2.
+// stretches further than that does lose rate, and that is the trade.
 func TestBrutalSurvivesAPathDelayRise(t *testing.T) {
 	if testing.Short() {
 		t.Skip("two transfers, and the first one exists only to establish the path minimum")

@@ -133,7 +133,7 @@ func TestPunchPacketSaltVariesWireBytes(t *testing.T) {
 // was measured on: over the packets of a single attempt, no byte offset carries
 // a value that repeats. The tag was a constant four bytes at offset 8, which
 // made "some 4-byte value at offset 8 repeats three times" a complete detector
-// at 100% / 0.00% false positives (docs/design/p1-punch-envelope.md).
+// at 100% / 0.00% false positives.
 //
 // The threshold is a multiple-comparison bound, not a feel. Each of the
 // wireLen*256 = 307200 (offset, value) cells holds a Binomial(256, 1/256) count
