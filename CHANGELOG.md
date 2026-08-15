@@ -48,9 +48,3 @@ first tag, this file switches to per-release sections.
   project-owned endpoint. Container images publish to `ghcr.io` instead of a
   DockerHub account we do not own.
 
-### Added
-
-- [`docs/research/architecture.md`](docs/research/architecture.md): the architecture
-  study behind the direction — current-state map, the reviewed design alternatives
-  and why two of three were rejected, the staged roadmap, and a ROI-ordered list of
-  improvements.

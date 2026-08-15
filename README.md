@@ -18,17 +18,19 @@ hostile one.
 
 ## Status
 
-**Early. Not ready for production, and not yet a mesh.**
+**Early. Not ready for production.**
 
 What works today is what Hysteria 2 already did: a fast QUIC proxy with SOCKS5 /
 HTTP / TUN / TProxy / redirect / port-forwarding inbounds, Salamander and Gecko
 obfuscation, and UDP hole punching via the `realm` rendezvous.
 
-What we are building toward is a Tailscale-shaped overlay: peers that find each
-other, survive endpoint changes without dropping the session, and fall back through
-progressively less pleasant paths — direct UDP, port hopping, TCP, relay — rather
-than failing outright. See [`docs/research/architecture.md`](docs/research/architecture.md)
-for the architecture study, the reviewed design alternatives, and the staged roadmap.
+What we are building toward is a connection that stays up when someone is trying
+to stop it. A censor does not usually switch a link off; it degrades it, blocks an
+address, resets a flow, or lets a connection through and identifies it later. So
+the work is in surviving that: finding a path when the obvious one is blocked,
+keeping a session alive when the endpoint changes underneath it, and falling back
+through progressively less pleasant paths — direct UDP, port hopping, TCP, relay —
+instead of failing outright, while looking like nothing in particular on the wire.
 
 ## Not compatible with Hysteria
 
