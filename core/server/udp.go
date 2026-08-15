@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/apernet/quic-go"
+	"github.com/chameleon-protocol/quic-go"
 
 	"github.com/chameleon-protocol/chameleon/core/v2/internal/frag"
 	"github.com/chameleon-protocol/chameleon/core/v2/internal/protocol"

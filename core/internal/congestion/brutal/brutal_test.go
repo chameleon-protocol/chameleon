@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/apernet/quic-go/congestion"
-	"github.com/apernet/quic-go/monotime"
+	"github.com/chameleon-protocol/quic-go/congestion"
+	"github.com/chameleon-protocol/quic-go/monotime"
 )
 
 // feedAckRate drives a single sampling slot with the given number of acked and

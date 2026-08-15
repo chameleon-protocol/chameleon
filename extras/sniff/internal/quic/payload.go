@@ -9,7 +9,7 @@ import (
 	"math"
 	"sort"
 
-	"github.com/apernet/quic-go/quicvarint"
+	"github.com/chameleon-protocol/quic-go/quicvarint"
 	"golang.org/x/crypto/hkdf"
 )
 

@@ -6,7 +6,7 @@ import (
 	"errors"
 	"io"
 
-	"github.com/apernet/quic-go/quicvarint"
+	"github.com/chameleon-protocol/quic-go/quicvarint"
 )
 
 // The Header represents a QUIC header.

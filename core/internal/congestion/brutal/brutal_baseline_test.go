@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/apernet/quic-go/congestion"
-	"github.com/apernet/quic-go/monotime"
+	"github.com/chameleon-protocol/quic-go/congestion"
+	"github.com/chameleon-protocol/quic-go/monotime"
 )
 
 // Baseline measurements of the controller as shipped.

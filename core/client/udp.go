@@ -6,7 +6,7 @@ import (
 	"math/rand"
 	"sync"
 
-	"github.com/apernet/quic-go"
+	"github.com/chameleon-protocol/quic-go"
 
 	coreErrs "github.com/chameleon-protocol/chameleon/core/v2/errors"
 	"github.com/chameleon-protocol/chameleon/core/v2/internal/frag"

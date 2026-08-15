@@ -15,8 +15,8 @@ import (
 	"github.com/chameleon-protocol/chameleon/core/v2/internal/utils"
 	"github.com/chameleon-protocol/chameleon/core/v2/pathstats"
 
-	"github.com/apernet/quic-go"
-	"github.com/apernet/quic-go/http3"
+	"github.com/chameleon-protocol/quic-go"
+	"github.com/chameleon-protocol/quic-go/http3"
 )
 
 const (

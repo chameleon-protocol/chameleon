@@ -3,8 +3,8 @@ package common
 import (
 	"time"
 
-	"github.com/apernet/quic-go/congestion"
-	"github.com/apernet/quic-go/monotime"
+	"github.com/chameleon-protocol/quic-go/congestion"
+	"github.com/chameleon-protocol/quic-go/monotime"
 )
 
 const (

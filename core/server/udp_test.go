@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/apernet/quic-go"
+	"github.com/chameleon-protocol/quic-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"go.uber.org/goleak"

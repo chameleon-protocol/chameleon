@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/apernet/quic-go/congestion"
-	"github.com/apernet/quic-go/monotime"
+	"github.com/chameleon-protocol/quic-go/congestion"
+	"github.com/chameleon-protocol/quic-go/monotime"
 )
 
 // The acceptance criteria from docs/research/brutal.md that can only be checked

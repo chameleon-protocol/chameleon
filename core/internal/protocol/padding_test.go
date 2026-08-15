@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/apernet/quic-go/quicvarint"
+	"github.com/chameleon-protocol/quic-go/quicvarint"
 )
 
 // These two seeds are used because all four of their derived ranges happen to

@@ -3,7 +3,7 @@ package bbr
 import (
 	"testing"
 
-	"github.com/apernet/quic-go/congestion"
+	"github.com/chameleon-protocol/quic-go/congestion"
 	"github.com/stretchr/testify/require"
 )
 

@@ -9,7 +9,7 @@ require (
 
 require (
 	github.com/andybalholm/brotli v1.1.0 // indirect
-	github.com/apernet/quic-go v0.61.1-0.20260806010916-184d081eef3e // indirect
+	github.com/chameleon-protocol/quic-go v0.61.1-0.20260815030739-0acaf9d284cc // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/klauspost/compress v1.17.9 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect

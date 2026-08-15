@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/apernet/quic-go/congestion"
-	"github.com/apernet/quic-go/monotime"
+	"github.com/chameleon-protocol/quic-go/congestion"
+	"github.com/chameleon-protocol/quic-go/monotime"
 
 	"github.com/chameleon-protocol/chameleon/core/v2/internal/congestion/common"
 )

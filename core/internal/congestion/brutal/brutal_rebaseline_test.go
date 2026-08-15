@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/apernet/quic-go/congestion"
-	"github.com/apernet/quic-go/monotime"
+	"github.com/chameleon-protocol/quic-go/congestion"
+	"github.com/chameleon-protocol/quic-go/monotime"
 )
 
 // What the path minimum is rebaselined from after OnPathChange, and what it is

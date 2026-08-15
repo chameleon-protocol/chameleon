@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/apernet/quic-go"
-	"github.com/apernet/quic-go/http3"
-	"github.com/apernet/quic-go/quicvarint"
+	"github.com/chameleon-protocol/quic-go"
+	"github.com/chameleon-protocol/quic-go/http3"
+	"github.com/chameleon-protocol/quic-go/quicvarint"
 
 	"github.com/chameleon-protocol/chameleon/core/v2/internal/congestion"
 	"github.com/chameleon-protocol/chameleon/core/v2/internal/protocol"

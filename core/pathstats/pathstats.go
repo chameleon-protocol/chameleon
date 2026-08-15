@@ -10,7 +10,7 @@ package pathstats
 import (
 	"time"
 
-	"github.com/apernet/quic-go"
+	"github.com/chameleon-protocol/quic-go"
 )
 
 // Stats is a point-in-time reading of one path.

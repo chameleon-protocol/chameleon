@@ -6,8 +6,8 @@ import (
 
 	"github.com/chameleon-protocol/chameleon/core/v2/internal/congestion/bbr"
 	"github.com/chameleon-protocol/chameleon/core/v2/internal/congestion/brutal"
-	"github.com/apernet/quic-go"
-	"github.com/apernet/quic-go/congestion"
+	"github.com/chameleon-protocol/quic-go"
+	"github.com/chameleon-protocol/quic-go/congestion"
 )
 
 const (

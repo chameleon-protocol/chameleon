@@ -8,7 +8,7 @@ import (
 
 	"github.com/chameleon-protocol/chameleon/core/v2/errors"
 
-	"github.com/apernet/quic-go/quicvarint"
+	"github.com/chameleon-protocol/quic-go/quicvarint"
 )
 
 const (
