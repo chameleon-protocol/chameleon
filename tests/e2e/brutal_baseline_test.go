@@ -108,6 +108,10 @@ func runBaseline(b *testing.B, profile netem.Profile, bw harness.Bandwidth, size
 		Bandwidth:      bw,
 		MaxIdleTimeout: idle,
 	})
+	// Released here rather than at the end of the benchmark: these sweeps build
+	// one environment per cell per iteration, and TB cleanup would hold every
+	// one of them open until the whole benchmark finished.
+	defer env.Close()
 
 	var wg sync.WaitGroup
 	var lat []time.Duration

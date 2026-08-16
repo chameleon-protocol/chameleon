@@ -83,9 +83,15 @@ type Bandwidth struct {
 // Env is a running server, client and echo server, plus the handle that
 // controls the link between them.
 type Env struct {
-	T      testing.TB
-	Ctrl   *netem.Controller
-	Client client.Client
+	T testing.TB
+
+	// closeServer releases the server socket. Cleanup on the TB does it too;
+	// this exists so a caller that builds many environments in one test or
+	// benchmark can release each one as it finishes instead of holding all of
+	// them open until the TB is done.
+	closeServer func()
+	Ctrl        *netem.Controller
+	Client      client.Client
 
 	// TCPEcho is the address of a TCP echo server, reachable only by asking the
 	// proxy to dial it.
@@ -143,7 +149,8 @@ func TryNew(t testing.TB, opts Options) (*Env, error) {
 		t.Fatalf("new server: %v", err)
 	}
 	go sv.Serve()
-	t.Cleanup(func() { _ = sv.Close() })
+	closeServer := func() { _ = sv.Close() }
+	t.Cleanup(closeServer)
 
 	tcpEcho := startTCPEcho(t)
 	udpEcho := startUDPEcho(t)
@@ -160,14 +167,29 @@ func TryNew(t testing.TB, opts Options) (*Env, error) {
 	}
 
 	return &Env{
-		T:          t,
-		Ctrl:       ctrl,
-		Client:     c,
-		TCPEcho:    tcpEcho,
-		UDPEcho:    udpEcho,
-		ServerAddr: serverAddr,
-		Paths:      paths,
+		T:           t,
+		Ctrl:        ctrl,
+		Client:      c,
+		closeServer: closeServer,
+		TCPEcho:     tcpEcho,
+		UDPEcho:     udpEcho,
+		ServerAddr:  serverAddr,
+		Paths:       paths,
 	}, nil
+}
+
+// Close releases the environment now rather than when the test or benchmark
+// that built it finishes. Calling it is optional and calling it twice is
+// harmless -- the TB cleanup still runs -- but a loop that builds one
+// environment per iteration holds every server socket it ever opened until the
+// TB is done unless it closes them as it goes.
+func (e *Env) Close() {
+	if e.closeServer != nil {
+		e.closeServer()
+	}
+	if e.Client != nil {
+		_ = e.Client.Close()
+	}
 }
 
 // dialClient brings up one client against serverAddr over ctrl's link.
