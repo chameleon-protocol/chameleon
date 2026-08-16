@@ -11,7 +11,7 @@ require (
 
 require (
 	github.com/andybalholm/brotli v1.1.0 // indirect
-	github.com/chameleon-protocol/quic-go v0.61.1-0.20260815030739-0acaf9d284cc // indirect
+	github.com/chameleon-protocol/quic-go v0.61.1-0.20260816042713-26292f14f1b2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/google/gopacket v1.1.19 // indirect
 	github.com/huin/goupnp v1.2.0 // indirect
