@@ -342,6 +342,11 @@ func (g *geckoPacketConn) Close() error {
 	return g.inner.Close()
 }
 
+// ObfuscationName reports gecko rather than the salamander it wraps, because
+// what goes on the wire is gecko's framing. See the method of the same name on
+// obfsPacketConn for why anything asks.
+func (g *geckoPacketConn) ObfuscationName() string { return "gecko" }
+
 func (g *geckoPacketConn) LocalAddr() net.Addr               { return g.inner.LocalAddr() }
 func (g *geckoPacketConn) SetDeadline(t time.Time) error     { return g.inner.SetDeadline(t) }
 func (g *geckoPacketConn) SetReadDeadline(t time.Time) error { return g.inner.SetReadDeadline(t) }

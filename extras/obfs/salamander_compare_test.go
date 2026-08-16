@@ -22,7 +22,7 @@ func BenchmarkSalamanderV1vsV2(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		conn := wrapPacketConn(discardPacketConn{}, ob)
+		conn := wrapPacketConn(discardPacketConn{}, ob, "test")
 		benchWrite(b, conn, pkt)
 	})
 
@@ -31,7 +31,7 @@ func BenchmarkSalamanderV1vsV2(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		conn := wrapPacketConn(discardPacketConn{}, ob)
+		conn := wrapPacketConn(discardPacketConn{}, ob, "test")
 		benchWrite(b, conn, pkt)
 	})
 }

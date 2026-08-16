@@ -46,19 +46,19 @@ func TestWrapPacketConnUsesUDPVariantForUDPConn(t *testing.T) {
 	require.NoError(t, err)
 	defer udp.Close()
 
-	wrapped := wrapPacketConn(udp, noopObfs{})
+	wrapped := wrapPacketConn(udp, noopObfs{}, "test")
 	_, ok := wrapped.(*obfsPacketConnUDP)
 	assert.True(t, ok, "wrapping a *net.UDPConn should return *obfsPacketConnUDP")
 }
 
 func TestWrapPacketConnUsesUDPVariantForUDPLikeWrapper(t *testing.T) {
-	wrapped := wrapPacketConn(fakeUDPLikeConn{}, noopObfs{})
+	wrapped := wrapPacketConn(fakeUDPLikeConn{}, noopObfs{}, "test")
 	_, ok := wrapped.(*obfsPacketConnUDP)
 	assert.True(t, ok, "wrapping a udpLikePacketConn should return *obfsPacketConnUDP")
 }
 
 func TestWrapPacketConnFallsBackForPlainPacketConn(t *testing.T) {
-	wrapped := wrapPacketConn(fakePlainConn{}, noopObfs{})
+	wrapped := wrapPacketConn(fakePlainConn{}, noopObfs{}, "test")
 	_, isUDP := wrapped.(*obfsPacketConnUDP)
 	assert.False(t, isUDP, "wrapping a plain net.PacketConn should not return *obfsPacketConnUDP")
 }

@@ -35,8 +35,37 @@ var bufPool = sync.Pool{
 type obfsPacketConn struct {
 	Conn  net.PacketConn
 	Obfs  obfuscator
+	name  string
 	stats *Stats
 }
+
+// ObfuscationName says which obfuscator this conn runs.
+//
+// It exists so a layer above can tell an obfuscated socket from a bare one
+// without importing this package: realm's disco demux refuses to start on a
+// socket whose packets go out in the clear, because measured against a real
+// captured flow no disco envelope hides in bare QUIC -- the best candidate
+// still showed 50% detection client-to-server and 24% server-to-client, caught
+// within the first four packets. A deployment that believes it has multi-path
+// failover and does not is worse off than one that knows it has none, so that
+// has to be a startup error, and a startup error needs something to test.
+func (c *obfsPacketConn) ObfuscationName() string { return c.name }
+
+// obfuscationNamer is realm's obfuscatedPacketConn, restated here because that
+// one is unexported in a package this one must not import. The assertions are
+// what make the compiler notice if a wrapper stops carrying the method: without
+// them the two halves of the contract are joined only by a runtime type
+// assertion in realm, which fails by silently refusing to start.
+//
+// The wrapper each entry point returns is asserted, not the obfuscator inside
+// it, because the wrapper is what realm is handed.
+type obfuscationNamer interface{ ObfuscationName() string }
+
+var (
+	_ obfuscationNamer = (*obfsPacketConn)(nil)
+	_ obfuscationNamer = (*obfsPacketConnUDP)(nil)
+	_ obfuscationNamer = (*geckoPacketConn)(nil)
+)
 
 // udpLikePacketConn is the subset of *net.UDPConn methods that quic-go relies
 // on for UDP-specific optimizations (DF/PMTU detection and recv/send buffer
@@ -62,10 +91,11 @@ type obfsPacketConnUDP struct {
 // The obfuscation is transparent to the caller - the n bytes returned by
 // ReadFrom and WriteTo are the number of original bytes, not after
 // obfuscation/deobfuscation.
-func wrapPacketConn(conn net.PacketConn, ob obfuscator) net.PacketConn {
+func wrapPacketConn(conn net.PacketConn, ob obfuscator, name string) net.PacketConn {
 	opc := &obfsPacketConn{
 		Conn:  conn,
 		Obfs:  ob,
+		name:  name,
 		stats: &Stats{},
 	}
 	if h, ok := ob.(statsHolder); ok {

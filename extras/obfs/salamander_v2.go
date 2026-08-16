@@ -190,7 +190,7 @@ func WrapPacketConnSalamanderV2(conn net.PacketConn, password []byte, realm stri
 	if err != nil {
 		return nil, err
 	}
-	return wrapPacketConn(conn, ob), nil
+	return wrapPacketConn(conn, ob, "salamander-v2"), nil
 }
 
 // Obfuscate lays out [salt][seal(payload || timestamp)][tag].

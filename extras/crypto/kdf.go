@@ -25,6 +25,21 @@ const (
 	CtxSalamanderV2S2C  = "chameleon/obfs/salamander-v2/s2c"
 	CtxAppPadding       = "chameleon/protocol/padding-v1"
 	CtxPunchMask        = "chameleon/punch-mask-v1"
+
+	// The disco contexts are expanded from a per-connection secret, not from a
+	// password, so they go through DeriveFromSecret rather than DeriveSubkey.
+	// That is the whole point of them: the obfuscation password is shared by
+	// every user of a deployment, so a disco key derived from it would let any
+	// one of them forge every other one's path claims.
+	CtxDiscoTagC2S  = "chameleon/realm/disco-v1/tag/c2s"
+	CtxDiscoTagS2C  = "chameleon/realm/disco-v1/tag/s2c"
+	CtxDiscoBodyC2S = "chameleon/realm/disco-v1/body/c2s"
+	CtxDiscoBodyS2C = "chameleon/realm/disco-v1/body/s2c"
+	CtxDiscoProbe   = "chameleon/realm/disco-v1/probe"
+	// CtxDiscoEpoch is the one context here used as a prefix: the epoch number
+	// is appended to it, because the demultiplexing tag rotates and each epoch
+	// needs its own expansion of the tag key. Every other constant is whole.
+	CtxDiscoEpoch = "chameleon/realm/disco-v1/epoch"
 )
 
 // Argon2id parameters for password stretching.
@@ -108,4 +123,30 @@ func StretchPassword(password []byte, realm string) (RootKey, error) {
 // ctx must be one of the Ctx constants above.
 func DeriveSubkey(root RootKey, ctx string, length int) ([]byte, error) {
 	return hkdf.Expand(sha256.New, root[:], ctx, length)
+}
+
+// MinSecretLen is the shortest secret DeriveFromSecret will expand. A TLS
+// exporter can be asked for any length, and asking it for four bytes and
+// stretching them would produce key material with four bytes of entropy in it
+// while looking exactly like key material that has thirty-two.
+const MinSecretLen = 32
+
+var ErrSecretTooShort = errors.New("secret must be at least 32 bytes")
+
+// DeriveFromSecret expands a secret that did not come from a password -- a TLS
+// exporter output, for instance -- into key material for one specific use.
+//
+// It exists so that a derivation from a non-password secret still goes through
+// this package rather than being written inline at the call site. There is no
+// password stretching here and there must not be: the input is already a
+// uniformly random secret, and Argon2id over it would buy nothing and cost the
+// connection setup path a hundred milliseconds.
+//
+// ctx must be one of the Ctx constants above, or one of them with a suffix
+// where the constant's documentation says it is a prefix.
+func DeriveFromSecret(secret []byte, ctx string, length int) ([]byte, error) {
+	if len(secret) < MinSecretLen {
+		return nil, ErrSecretTooShort
+	}
+	return hkdf.Expand(sha256.New, secret, ctx, length)
 }

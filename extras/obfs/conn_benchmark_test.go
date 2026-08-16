@@ -24,7 +24,7 @@ func BenchmarkWriteToParallel(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	conn := wrapPacketConn(discardPacketConn{}, ob)
+	conn := wrapPacketConn(discardPacketConn{}, ob, "test")
 	pkt := make([]byte, 1400) // a full-size QUIC packet
 
 	b.SetBytes(int64(len(pkt)))
@@ -43,7 +43,7 @@ func BenchmarkWriteToSerial(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	conn := wrapPacketConn(discardPacketConn{}, ob)
+	conn := wrapPacketConn(discardPacketConn{}, ob, "test")
 	pkt := make([]byte, 1400)
 
 	b.SetBytes(int64(len(pkt)))

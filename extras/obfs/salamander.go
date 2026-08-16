@@ -53,7 +53,7 @@ func WrapPacketConnSalamander(conn net.PacketConn, psk []byte) (net.PacketConn, 
 	if err != nil {
 		return nil, err
 	}
-	return wrapPacketConn(conn, ob), nil
+	return wrapPacketConn(conn, ob, "salamander"), nil
 }
 
 func (o *salamanderObfuscator) Obfuscate(in, out []byte) int {

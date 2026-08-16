@@ -165,7 +165,7 @@ func TestPacketConnCountsSilentDrops(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	conn := wrapPacketConn(&junkConn{remaining: 5}, ob)
+	conn := wrapPacketConn(&junkConn{remaining: 5}, ob, "test")
 
 	if _, _, err := conn.ReadFrom(make([]byte, 2048)); !errors.Is(err, io.EOF) {
 		t.Fatalf("ReadFrom should have looped over the junk and reported the close, got %v", err)
