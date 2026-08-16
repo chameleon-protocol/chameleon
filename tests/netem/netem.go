@@ -172,6 +172,24 @@ func (p Profile) WithBlackhole(on bool) Profile {
 	return p
 }
 
+// WithUpBlackhole returns a copy of p that drops everything the wrapped
+// endpoint sends and nothing it receives. This is the half-open failure a
+// stateful middlebox produces when it decides to drop one direction of a flow,
+// and it is not symmetric with WithDownBlackhole: which direction died changes
+// what each end can still observe, and one of the two ends observes nothing at
+// all.
+func (p Profile) WithUpBlackhole(on bool) Profile {
+	p.Up.Blackhole = on
+	return p
+}
+
+// WithDownBlackhole returns a copy of p that drops everything the wrapped
+// endpoint receives and nothing it sends.
+func (p Profile) WithDownBlackhole(on bool) Profile {
+	p.Down.Blackhole = on
+	return p
+}
+
 // Clean is a pass-through profile. It is the baseline every other measurement
 // must be compared against: a Conn is not a *net.UDPConn, so it costs
 // throughput even when it impairs nothing.
