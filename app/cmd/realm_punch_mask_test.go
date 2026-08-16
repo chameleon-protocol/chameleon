@@ -11,7 +11,7 @@ import (
 
 func TestRealmPunchMaskRequiresObfs(t *testing.T) {
 	for _, obfsType := range []string{"", "plain", "PLAIN"} {
-		_, err := realmPunchMask(obfsType, "", "", "", "")
+		_, err := realmPunchMask(obfsType, "", "")
 		require.Error(t, err)
 		assert.ErrorIs(t, err, errRealmPunchNeedsObfs)
 		var cfgErr configError
@@ -20,37 +20,43 @@ func TestRealmPunchMaskRequiresObfs(t *testing.T) {
 	}
 }
 
-func TestRealmPunchMaskPerObfsType(t *testing.T) {
-	salamander, err := realmPunchMask("salamander", "v1-password", "", "", "")
+func TestRealmPunchMaskRejectsUnmeasuredObfs(t *testing.T) {
+	// Salamander v1 and gecko have a password to derive from, so they used to
+	// be accepted. They are refused now because punching hides by looking like
+	// the obfuscated flow beside it, and only salamander v2's flow was ever
+	// captured. Gecko additionally pads to a range, so a punch packet has no
+	// modal length to copy and would fall back to a band measured at 85-97%.
+	for _, obfsType := range []string{"salamander", "gecko", "GECKO"} {
+		_, err := realmPunchMask(obfsType, "", "")
+		require.Error(t, err, obfsType)
+		assert.ErrorIs(t, err, errRealmPunchNeedsV2)
+		var cfgErr configError
+		require.ErrorAs(t, err, &cfgErr)
+		assert.Equal(t, "obfs.type", cfgErr.Field)
+	}
+}
+
+func TestRealmPunchMaskScopesToTheRealm(t *testing.T) {
+	v2, err := realmPunchMask("salamander-v2", "v2-password", "deployment")
 	require.NoError(t, err)
-	v2, err := realmPunchMask("salamander-v2", "", "v2-password", "deployment", "")
-	require.NoError(t, err)
-	gecko, err := realmPunchMask("gecko", "", "", "", "gecko-password")
-	require.NoError(t, err)
-	assert.NotEqual(t, salamander, v2)
-	assert.NotEqual(t, v2, gecko)
 
 	// The realm scopes the derivation, so the same v2 password in two
 	// deployments must not produce one mask key.
-	other, err := realmPunchMask("salamander-v2", "", "v2-password", "other-deployment", "")
+	other, err := realmPunchMask("salamander-v2", "v2-password", "other-deployment")
 	require.NoError(t, err)
 	assert.NotEqual(t, v2, other)
 
-	_, err = realmPunchMask("salamander-v2", "", "abc", "", "")
+	_, err = realmPunchMask("salamander-v2", "abc", "")
 	require.Error(t, err)
 	var cfgErr configError
 	require.ErrorAs(t, err, &cfgErr)
 	assert.Equal(t, "obfs.salamanderV2.password", cfgErr.Field)
 
-	_, err = realmPunchMask("nonsense", "", "", "", "")
+	_, err = realmPunchMask("nonsense", "", "")
 	require.Error(t, err)
 	require.ErrorAs(t, err, &cfgErr)
 	assert.Equal(t, "obfs.type", cfgErr.Field)
 }
-
-// Both ends must refuse to start, not fall back to punching in the clear.
-// These go through the real startup path, which reaches the mask before it
-// opens a socket.
 func TestRealmStartupFailsWithoutObfs(t *testing.T) {
 	t.Run("server", func(t *testing.T) {
 		addr, ok, err := parseServerRealmAddr("realm://token@example.com/realm")

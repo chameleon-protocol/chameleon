@@ -10,12 +10,28 @@ import (
 // errRealmPunchNeedsObfs is a startup failure, not a downgrade. Punch packets
 // share a five-tuple with the QUIC connection, and under obfs.type plain there
 // is no envelope that hides in that flow: the best measured candidate still
-// showed 50% detection client-to-server and 24% server-to-client. A realm listener
-// that came up anyway would be handing the operator a connection that works and
-// is trivially fingerprinted, which is worse than one that refuses to start.
+// showed 50% detection client-to-server and 24% server-to-client. A realm
+// listener that came up anyway would be handing the operator a connection that
+// works and is trivially fingerprinted, which is worse than one that refuses to
+// start.
 var errRealmPunchNeedsObfs = errors.New(
-	"realm punching requires obfuscation: set obfs.type (salamander-v2 is the one whose " +
-		"background this was measured against) so the punch mask key has a password to derive from")
+	"realm punching requires obfs.type salamander-v2, so the punch mask key has a password " +
+		"to derive from and the punch packets have a measured background to hide in")
+
+// errRealmPunchNeedsV2 is the same refusal for the obfuscators that do have a
+// password but whose traffic nobody has measured.
+//
+// Punching hides by looking like the obfuscated flow beside it, and what that
+// flow looks like was captured for salamander v2 only. Salamander v1 and gecko
+// were once accepted on the argument that their output is not clear QUIC
+// either -- but that is an argument, and the whole envelope was redesigned
+// because an argument of exactly that shape turned out to be wrong when it was
+// finally measured. Gecko additionally pads every datagram to a random size in
+// a range, so there is no modal length for a punch packet to copy and it would
+// fall back to a band that measures 85-97%.
+var errRealmPunchNeedsV2 = errors.New(
+	"realm punching requires obfs.type salamander-v2: it is the only obfuscator whose traffic " +
+		"the punch packet lengths were measured against")
 
 // realmPunchMask derives the realm-wide key that masks punch packets, from the
 // obfuscation password of whichever obfuscator is configured.
@@ -31,18 +47,16 @@ var errRealmPunchNeedsObfs = errors.New(
 // punching does not add one. They are accepted rather than rejected because
 // their output is not clear QUIC either; that is an argument, not a
 // measurement, and the measurement covers salamander v2 only.
-func realmPunchMask(obfsType, salamanderPassword, salamanderV2Password, salamanderV2Realm, geckoPassword string) (realm.PunchMask, error) {
+func realmPunchMask(obfsType, salamanderV2Password, salamanderV2Realm string) (realm.PunchMask, error) {
 	// Matched exactly as wrapObfs dispatches, so the key exists when — and only
 	// when — an obfuscator actually engages.
 	switch strings.ToLower(obfsType) {
 	case "", "plain":
 		return realm.PunchMask{}, configError{Field: "obfs.type", Err: errRealmPunchNeedsObfs}
-	case "salamander":
-		return punchMaskOrConfigError("obfs.salamander.password", salamanderPassword, "")
+	case "salamander", "gecko":
+		return realm.PunchMask{}, configError{Field: "obfs.type", Err: errRealmPunchNeedsV2}
 	case "salamander-v2":
 		return punchMaskOrConfigError("obfs.salamanderV2.password", salamanderV2Password, salamanderV2Realm)
-	case "gecko":
-		return punchMaskOrConfigError("obfs.gecko.password", geckoPassword, "")
 	default:
 		return realm.PunchMask{}, configError{Field: "obfs.type", Err: errors.New("unsupported obfuscation type")}
 	}

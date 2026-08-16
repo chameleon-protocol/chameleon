@@ -429,10 +429,7 @@ func (c *serverConfig) fillRealmConn(hyConfig *server.Config, addr *realm.Addr) 
 }
 
 func (c *serverConfig) realmPunchMask() (realm.PunchMask, error) {
-	return realmPunchMask(c.Obfs.Type,
-		c.Obfs.Salamander.Password,
-		c.Obfs.SalamanderV2.Password, c.Obfs.SalamanderV2.Realm,
-		c.Obfs.Gecko.Password)
+	return realmPunchMask(c.Obfs.Type, c.Obfs.SalamanderV2.Password, c.Obfs.SalamanderV2.Realm)
 }
 
 func (c *serverConfig) wrapObfs(conn net.PacketConn) (net.PacketConn, error) {

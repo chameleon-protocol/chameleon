@@ -354,10 +354,7 @@ func (c *clientConfig) socketOptions() (*sockopts.SocketOptions, error) {
 }
 
 func (c *clientConfig) realmPunchMask() (realm.PunchMask, error) {
-	return realmPunchMask(c.Obfs.Type,
-		c.Obfs.Salamander.Password,
-		c.Obfs.SalamanderV2.Password, c.Obfs.SalamanderV2.Realm,
-		c.Obfs.Gecko.Password)
+	return realmPunchMask(c.Obfs.Type, c.Obfs.SalamanderV2.Password, c.Obfs.SalamanderV2.Realm)
 }
 
 func (c *clientConfig) wrapObfs(conn net.PacketConn) (net.PacketConn, error) {
