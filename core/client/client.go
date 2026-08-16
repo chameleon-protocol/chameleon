@@ -7,10 +7,10 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	coreErrs "github.com/chameleon-protocol/chameleon/core/v2/errors"
-	"github.com/chameleon-protocol/chameleon/core/v2/internal/congestion"
 	"github.com/chameleon-protocol/chameleon/core/v2/internal/protocol"
 	"github.com/chameleon-protocol/chameleon/core/v2/internal/utils"
 	"github.com/chameleon-protocol/chameleon/core/v2/pathstats"
@@ -65,6 +65,13 @@ type clientImpl struct {
 	pktConn net.PacketConn
 	tr      *quic.Transport
 	conn    *quic.Conn
+
+	// txRate is the send rate the handshake settled on, zero when none was
+	// agreed. It is kept because a path switch has to install the same
+	// congestion controller again, and by then the auth response is gone.
+	txRate uint64
+	// pathMu serializes path switches. See SwitchTo.
+	pathMu sync.Mutex
 
 	udpSM *udpSessionManager
 }
@@ -153,24 +160,22 @@ func (c *clientImpl) connect() (*HandshakeInfo, error) {
 	// Auth OK
 	authResp := protocol.AuthResponseFromHeader(resp.Header)
 	var actualTx uint64
-	if authResp.RxAuto {
-		// Server asks client to use bandwidth detection,
-		// ignore local bandwidth config and use the configured congestion controller.
-		congestion.UseConfigured(conn, c.config.CongestionConfig.Type, c.config.CongestionConfig.BBRProfile)
-	} else {
-		// actualTx = min(serverRx, clientTx)
+	if !authResp.RxAuto {
+		// The server asking for bandwidth detection is the one case where the
+		// local bandwidth config is ignored outright; otherwise
+		// actualTx = min(serverRx, clientTx), and a zero result means neither
+		// end knows its own rate.
 		actualTx = authResp.Rx
 		if actualTx == 0 || actualTx > c.config.BandwidthConfig.MaxTx {
 			// Server doesn't have a limit, or our clientTx is smaller than serverRx
 			actualTx = c.config.BandwidthConfig.MaxTx
 		}
-		if actualTx > 0 {
-			congestion.UseBrutal(conn, actualTx, c.config.BandwidthConfig.DisableLossCompensation)
-		} else {
-			// We don't know our own bandwidth either, use the configured congestion controller.
-			congestion.UseConfigured(conn, c.config.CongestionConfig.Type, c.config.CongestionConfig.BBRProfile)
-		}
 	}
+	// Recorded rather than acted on directly, because a path switch has to make
+	// the same choice again after resetting the connection's path state, which
+	// drops whatever controller is installed. See SwitchTo.
+	c.txRate = actualTx
+	c.installCongestionControl(conn)
 	_ = resp.Body.Close()
 
 	c.pktConn = pktConn

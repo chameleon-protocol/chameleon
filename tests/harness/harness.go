@@ -250,9 +250,22 @@ type Peer struct {
 // regardless of what the first client declared.
 func (e *Env) AddClient(profile netem.Profile, seed uint64, opts Options) (*Peer, error) {
 	e.T.Helper()
+	return e.AddClientAt(e.ServerAddr, profile, seed, opts)
+}
+
+// AddClientAt is AddClient against a chosen server address.
+//
+// It exists because a MultiPath leg carries exactly one client: the leg learns
+// where to send the server's replies from the source address of the last
+// datagram it forwarded, so a second client dialling the same leg takes the
+// first one's return path away. A peer that is only there to put load on a
+// shared bottleneck therefore has to reach the server past the legs, at
+// Env.Paths.Origin().
+func (e *Env) AddClientAt(addr net.Addr, profile netem.Profile, seed uint64, opts Options) (*Peer, error) {
+	e.T.Helper()
 	ctrl := netem.NewController(profile)
 	ctrl.SetSeed(seed)
-	c, err := dialClient(e.T, ctrl, e.ServerAddr, opts)
+	c, err := dialClient(e.T, ctrl, addr, opts)
 	if err != nil {
 		return nil, err
 	}
