@@ -261,6 +261,7 @@ The macOS path has not been exercised — this machine cannot run it without roo
 | `TestKernelNetemMatchesUserspace` | Always skipped unless kernel mode is enabled, as above. |
 | `TestFullyBlockedUDPPreventsConnection`, `TestFailoverAfterUDPBlackhole`, `TestBlackholingTheCandidateInUseStrandsTheClient` | Skipped under `-short`: they spend real seconds waiting out QUIC's handshake and idle timeouts, which is the thing being measured. |
 | `TestFailoverToLivingCandidate` | Always skipped: there is no Selector, so nothing can move a connection between candidates. It is written out in full as the landing point for P1b. |
+| Everything in `e2e/pathfail_test.go` | Skipped under `-short`: each case holds a live connection for eleven or twelve seconds, because the detection latencies being measured are seconds long. |
 
 ## Indicative numbers
 
@@ -302,6 +303,40 @@ series, err := env.LatencySeries(harness.Probe{
 // bytes each moved over the same interval.
 n, err := env.TCPLoadFor(env.Client, 12*time.Second)
 ```
+
+## Watching a connection break
+
+`MeasureFailover` answers "how long was the outage". `Env.Observe` answers the
+different question a Selector has to answer: *what did this look like from
+inside the endpoint, and could it have been told from a path that was merely
+bad*. It runs load, changes the link underneath it at a chosen moment, and
+records two streams at once — `client.PathStatsProvider` readings at a chosen
+interval, and the outcome of every application exchange.
+
+```go
+env := harness.New(t, harness.Options{Profile: netem.RTT(50 * time.Millisecond)})
+rep := env.Observe(harness.Observation{
+	Gap: 50 * time.Millisecond, Payload: 100,        // or Bulk: true
+	Sample: 20 * time.Millisecond, ExchangeTimeout: 2 * time.Second,
+	FaultAt: 2 * time.Second, Duration: 11 * time.Second,
+	Fault: netem.RTT(50 * time.Millisecond).WithUpBlackhole(true),
+})
+sig := rep.Signature()             // only what a caller of the core could read
+fired := rep.DetectAt(2 * time.Second) // when a silence detector would have fired
+upIn, upOut, _, _ := rep.Delivered()   // netem's ground truth, for confirming the fault
+```
+
+The split is the point and it is enforced by keeping the two on separate types.
+A `Signature` contains nothing that is not reachable through the core's public
+surface, so any detector keyed on one of its fields is a detector that can be
+built. `Delivered` and the `netem.Stats` snapshots beside it are ground truth
+that only the bed has: they belong in the `require` that proves the scenario
+ran, and nowhere else.
+
+`Profile.WithUpBlackhole` and `WithDownBlackhole` kill one direction. They are
+not symmetric in what they leave observable, which is a finding rather than an
+inconvenience — see `e2e/pathfail_test.go`, whose closing comment carries the
+numbers and the recommendation the Selector's detector should be built on.
 
 ## Baselines
 
