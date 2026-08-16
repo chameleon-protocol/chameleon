@@ -15,16 +15,21 @@ import (
 
 // This file covers the TLS exporter (RFC 5705 / RFC 8446 §7.5).
 //
-// The planned control protocol keys itself off a per-connection secret
-// exported from the QUIC handshake:
+// The planned control protocol keys itself off a per-connection secret exported
+// from the QUIC handshake, via the fork's (*quic.Conn).ExportKeyingMaterial.
+// That method exists because the obvious expression,
+// conn.ConnectionState().TLS.ExportKeyingMaterial(...), does not work on the
+// client chameleon actually ships: tls.ConnectionState keeps the exporter in an
+// unexported func field, the ChromeParrot client's state is rebuilt field by
+// field out of uTLS's, and calling a nil func value panics rather than failing.
+// The measurement that produced the method is what these tests now guard.
 //
-//	discoSecret = conn.ConnectionState().TLS.ExportKeyingMaterial(...)
-//
-// The claim under test is not "can it be exported" but "do the two ends export
-// the *same* value", including across session resumption and 0-RTT, which is
-// exactly what a chameleon client does when it reconnects and what a P1
-// candidate switch may trigger. The tests below run a real quic-go client and
-// server over loopback UDP and compare the two sides byte for byte.
+// The claims under test are that both ends export the *same* value, that the
+// value is fresh per connection across session resumption and 0-RTT (what a
+// chameleon reconnect and a P1 candidate switch do), that the ChromeParrot
+// client can export at all, and that neither end can export before its handshake
+// completes. The tests run a real quic-go client and server over loopback UDP
+// and compare the two sides byte for byte.
 //
 // The tests live in core because core is the module that owns the quic-go
 // dependency and the two places that hold a *quic.Conn (core/client/client.go,
@@ -35,30 +40,33 @@ import (
 // add moving parts between the exporter and the assertion.
 
 const (
-	// ekmLabel is the exporter label proposed in §1.4 of the disco design. RFC
-	// 8446 §7.5 requires exporter labels to be unique per use; the value is
-	// carried here verbatim so the spike measures the real thing.
+	// ekmLabel is the exporter label proposed for the disco secret. RFC 8446 §7.5
+	// requires exporter labels to be unique per use; the value is carried here
+	// verbatim so the tests measure the real thing.
 	ekmLabel = "EXPORTER-chameleon-disco-v1"
 	ekmALPN  = "chameleon-ekm-spike"
 	ekmLen   = 32
+
+	// ekmTooEarly is the fork's own refusal. crypto/tls has a refusal of its own
+	// for the client's pre-handshake case, with different (and misleading) text,
+	// so matching this string is what distinguishes "the guard held" from "the
+	// TLS stack happened to say no anyway".
+	ekmTooEarly = "before the handshake completes"
 )
 
-// exportEKM calls the exporter exactly the way the disco design proposes to, and
-// reports what actually happens.
+// exportEKM calls the exporter the way the disco code will.
 //
-// The panic recovery is not defensive noise: tls.ConnectionState holds the
-// exporter as an unexported func field, so a ConnectionState that was rebuilt
-// field by field (which is what the ChromeParrot/uTLS path does) carries a nil
-// closure, and calling it is a nil func call -- a panic, not an error. Telling
-// "unavailable" apart from "crashes the caller" is a result of this spike.
+// The panic recovery is not defensive noise about the current API but a guard
+// against regressing to the old one: if the exporter ever again comes from a
+// rebuilt tls.ConnectionState, the failure is a nil func call, and a panicking
+// test binary reports far worse than a failed assertion.
 func exportEKM(conn *quic.Conn) (km []byte, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("ExportKeyingMaterial panicked: %v", r)
 		}
 	}()
-	cs := conn.ConnectionState()
-	return cs.TLS.ExportKeyingMaterial(ekmLabel, nil, ekmLen)
+	return conn.ExportKeyingMaterial(ekmLabel, nil, ekmLen)
 }
 
 // ekmServer is a bare quic-go server that hands every accepted connection to a
@@ -67,7 +75,24 @@ type ekmServer struct {
 	tr    *quic.Transport
 	ln    *quic.EarlyListener
 	addr  net.Addr
-	conns chan *quic.Conn
+	conns chan *ekmAccepted
+}
+
+// ekmAccepted is what the accept loop saw at the instant a connection was handed
+// over, plus the connection itself.
+//
+// The pre-handshake sample has to be taken there rather than after the test
+// goroutine gets around to reading the channel: with ListenEarly and Allow0RTT
+// the server is handed a connection inside the 0-RTT window, and that window
+// closes as soon as the client's Finished arrives. Sampling late would not fail,
+// it would silently stop covering the pre-handshake case.
+type ekmAccepted struct {
+	conn *quic.Conn
+	// handshakeDone reports whether the handshake had already finished by the
+	// time Accept returned, i.e. whether there was a window to sample at all.
+	handshakeDone bool
+	earlyEKM      []byte
+	earlyErr      error
 }
 
 func newEKMServer(t *testing.T) *ekmServer {
@@ -90,14 +115,20 @@ func newEKMServer(t *testing.T) *ekmServer {
 		&quic.Config{Allow0RTT: true},
 	)
 	require.NoError(t, err)
-	s := &ekmServer{tr: tr, ln: ln, addr: udpConn.LocalAddr(), conns: make(chan *quic.Conn, 4)}
+	s := &ekmServer{tr: tr, ln: ln, addr: udpConn.LocalAddr(), conns: make(chan *ekmAccepted, 4)}
 	go func() {
 		for {
 			conn, err := ln.Accept(context.Background())
 			if err != nil {
 				return
 			}
-			s.conns <- conn
+			a := &ekmAccepted{conn: conn}
+			if handshakeDone(conn) {
+				a.handshakeDone = true
+			} else {
+				a.earlyEKM, a.earlyErr = exportEKM(conn)
+			}
+			s.conns <- a
 			go s.echo(conn)
 		}
 	}()
@@ -118,11 +149,11 @@ func (s *ekmServer) echo(conn *quic.Conn) {
 	_ = str.Close()
 }
 
-func (s *ekmServer) accept(t *testing.T) *quic.Conn {
+func (s *ekmServer) accept(t *testing.T) *ekmAccepted {
 	t.Helper()
 	select {
-	case conn := <-s.conns:
-		return conn
+	case a := <-s.conns:
+		return a
 	case <-time.After(5 * time.Second):
 		t.Fatal("server did not accept a connection")
 		return nil
@@ -186,6 +217,19 @@ func waitHandshake(t *testing.T, conn *quic.Conn) {
 	}
 }
 
+// handshakeDone reports whether the handshake has finished, without waiting for
+// it. HandshakeComplete is the only reliable signal on either end: the client's
+// TLS stack reports a version and a completion flag that are not yet meaningful
+// while the handshake is still running.
+func handshakeDone(conn *quic.Conn) bool {
+	select {
+	case <-conn.HandshakeComplete():
+		return true
+	default:
+		return false
+	}
+}
+
 // roundTrip pushes bytes through a stream so that the exporter can be sampled
 // again after real 1-RTT traffic, not only at the instant the handshake ends.
 func roundTrip(t *testing.T, conn *quic.Conn) {
@@ -214,7 +258,7 @@ func TestEKMStdlibPath(t *testing.T) {
 		NextProtos:         []string{ekmALPN},
 	}
 	_, cConn := ekmClient(t, s, clientTLS, false)
-	sConn := s.accept(t)
+	sConn := s.accept(t).conn
 	waitHandshake(t, cConn)
 	// The server's handshake only completes when the client's Finished arrives,
 	// so it needs its own wait; sampling it right after Accept is a race.
@@ -238,8 +282,7 @@ func TestEKMStdlibPath(t *testing.T) {
 
 	// Different labels must give different keys, otherwise the design's
 	// per-purpose derivation would collapse into one key.
-	otherTLS := cConn.ConnectionState().TLS
-	other, err := otherTLS.ExportKeyingMaterial("EXPORTER-chameleon-other-v1", nil, ekmLen)
+	other, err := cConn.ExportKeyingMaterial("EXPORTER-chameleon-other-v1", nil, ekmLen)
 	require.NoError(t, err)
 	require.NotEqual(t, cEKM, other)
 }
@@ -263,7 +306,7 @@ func TestEKMResumptionAndZeroRTT(t *testing.T) {
 	}
 
 	_, cConn1 := ekmClient(t, s, clientTLS, false)
-	sConn1 := s.accept(t)
+	sConn1 := s.accept(t).conn
 	waitHandshake(t, cConn1)
 	waitHandshake(t, sConn1)
 	cEKM1, err := exportEKM(cConn1)
@@ -283,30 +326,39 @@ func TestEKMResumptionAndZeroRTT(t *testing.T) {
 
 	_, cConn2 := ekmClient(t, s, clientTLS, false)
 
-	// DialEarly returns before the handshake finishes when a ticket is available.
-	// The exporter does not exist yet at that point: TLS 1.3 derives the exporter
-	// master secret from the transcript through server Finished, and Go exposes no
-	// early-exporter API at all. Only assert when the handshake really is still
-	// running, so the check cannot flake on a fast loopback.
-	if !cConn2.ConnectionState().TLS.HandshakeComplete {
+	// DialEarly returns before the handshake finishes when a ticket is available,
+	// which is the client half of the timing rule. There is genuinely nothing to
+	// export yet -- TLS 1.3 derives the exporter master secret from a transcript
+	// that runs through server Finished, and Go exposes no early-exporter API --
+	// so crypto/tls would refuse anyway, but with its own misleading text about
+	// version negotiation. Matching the fork's wording is what makes this assert
+	// the guard rather than the accident.
+	clientWindow := !handshakeDone(cConn2)
+	if clientWindow {
 		_, err := exportEKM(cConn2)
 		require.Error(t, err, "the exporter must not be usable before the handshake completes")
-		t.Logf("export before handshake completion: %v", err)
+		require.Contains(t, err.Error(), ekmTooEarly,
+			"the refusal must come from the handshake guard, not from whatever the TLS stack says")
 	}
 
-	// The server accepts a 0-RTT connection before its own handshake is done, and
-	// unlike the client it *can* already export there: crypto/tls installs the
+	// The server half is where the guard earns its keep: crypto/tls installs the
 	// server's exporter as soon as it has the master secret, which is before the
-	// client's Finished arrives. The two ends are therefore not symmetric in when
-	// the exporter appears, which is why disco must gate on HandshakeComplete
-	// rather than on "the export call succeeded". The value itself is recorded
-	// here and compared with the post-handshake one further down.
-	sConn2 := s.accept(t)
-	var sEKMEarly []byte
-	if !sConn2.ConnectionState().TLS.HandshakeComplete {
-		sEKMEarly, err = exportEKM(sConn2)
-		t.Logf("server-side export during the 0-RTT window: len=%d err=%v", len(sEKMEarly), err)
+	// client's Finished arrives, so inside the 0-RTT window the raw stack exports
+	// a value the client cannot yet compute. That sample is taken in the accept
+	// loop; see ekmAccepted.
+	sa2 := s.accept(t)
+	if !sa2.handshakeDone {
+		require.Error(t, sa2.earlyErr,
+			"the server must refuse inside the 0-RTT window even though its TLS stack could export there")
+		require.Contains(t, sa2.earlyErr.Error(), ekmTooEarly)
+		require.Nil(t, sa2.earlyEKM)
 	}
+	// Both windows are opened by timing, so record whether they were actually
+	// reached; a run where neither was is a run that did not test the guard.
+	t.Logf("pre-handshake windows observed: client=%v server=%v", clientWindow, !sa2.handshakeDone)
+	require.True(t, clientWindow || !sa2.handshakeDone,
+		"neither end was sampled before its handshake completed, so the timing rule went untested")
+	sConn2 := sa2.conn
 
 	// Writing before the handshake completes is what makes the data 0-RTT.
 	roundTrip(t, cConn2)
@@ -328,18 +380,16 @@ func TestEKMResumptionAndZeroRTT(t *testing.T) {
 	require.Equal(t, cEKM2, sEKM2, "the two ends must agree across resumption")
 	require.NotEqual(t, cEKM1, cEKM2,
 		"a resumed connection must export a fresh secret, or disco keys would survive a reconnect")
-	if sEKMEarly != nil {
-		require.Equal(t, sEKM2, sEKMEarly,
-			"an early server-side export must not disagree with the post-handshake one")
-	}
 }
 
-// TestEKMChromeParrot pins today's behaviour on the client default. ChromeParrot
-// runs the client handshake through uTLS, and the adapter in the fork
-// (internal/handshake/tls_conn_utls.go) rebuilds tls.ConnectionState field by
-// field. The exporter closure is an unexported field, so it cannot be carried
-// across and is nil: the design's expression does not merely fail on the default
-// client, it panics.
+// TestEKMChromeParrot covers the client chameleon actually ships. ChromeParrot
+// runs the client handshake through uTLS while the server stays on crypto/tls,
+// so this is the case where the exporter has to cross two TLS implementations:
+// the fork reaches uTLS's own exporter through a method, because the
+// tls.ConnectionState the adapter rebuilds cannot carry the closure.
+//
+// This is the load-bearing test of the whole exercise. If the client half ever
+// stops delegating to uTLS, the two ends stop agreeing here.
 func TestEKMChromeParrot(t *testing.T) {
 	s := newEKMServer(t)
 	cache := newSignallingCache()
@@ -349,26 +399,30 @@ func TestEKMChromeParrot(t *testing.T) {
 		ClientSessionCache: cache,
 	}
 	_, cConn := ekmClient(t, s, clientTLS, true)
-	sConn := s.accept(t)
+	sConn := s.accept(t).conn
 	waitHandshake(t, cConn)
 	waitHandshake(t, sConn)
 	roundTrip(t, cConn)
 
-	// The server is plain crypto/tls regardless of what the client parrots, so
-	// its half of the exporter works. Only the client half is missing, which is
-	// enough to make the shared secret unobtainable.
+	cEKM, err := exportEKM(cConn)
+	require.NoError(t, err, "the ChromeParrot client must be able to export")
+	require.Len(t, cEKM, ekmLen)
+
+	// The server is plain crypto/tls regardless of what the client parrots. Equal
+	// values here mean uTLS's exporter and crypto/tls's agree on the same
+	// handshake, which is the property the whole scheme rests on.
 	sEKM, err := exportEKM(sConn)
 	require.NoError(t, err, "server side is crypto/tls and must still export")
-	require.Len(t, sEKM, ekmLen)
+	require.Equal(t, cEKM, sEKM, "uTLS client and crypto/tls server must export the same secret")
 
-	_, err = exportEKM(cConn)
-	require.Error(t, err, "ChromeParrot client is expected to have no exporter today")
-	t.Logf("ChromeParrot client-side export: %v", err)
+	other, err := cConn.ExportKeyingMaterial("EXPORTER-chameleon-other-v1", nil, ekmLen)
+	require.NoError(t, err)
+	require.NotEqual(t, cEKM, other, "labels must separate keys on the uTLS path too")
 
-	// ChromeParrot also turns session resumption off at the source (uTLS session
-	// state cannot be converted into a *tls.SessionState), so on the default
-	// client the whole 0-RTT question is moot: there is never a second
-	// connection to be inconsistent with.
+	// ChromeParrot turns session resumption off at the source (uTLS session state
+	// cannot be converted into a *tls.SessionState), so on the default client the
+	// whole 0-RTT question is moot: there is never a second connection to be
+	// inconsistent with.
 	select {
 	case <-cache.stored:
 		t.Fatal("ChromeParrot unexpectedly cached a session ticket")
@@ -377,9 +431,17 @@ func TestEKMChromeParrot(t *testing.T) {
 	_ = cConn.CloseWithError(0, "")
 
 	_, cConn2 := ekmClient(t, s, clientTLS, true)
-	sConn2 := s.accept(t)
+	sConn2 := s.accept(t).conn
 	waitHandshake(t, cConn2)
 	waitHandshake(t, sConn2)
 	require.False(t, cConn2.ConnectionState().TLS.DidResume,
 		"ChromeParrot must never resume, so 0-RTT cannot happen on the default client")
+
+	cEKM2, err := exportEKM(cConn2)
+	require.NoError(t, err)
+	sEKM2, err := exportEKM(sConn2)
+	require.NoError(t, err)
+	require.Equal(t, cEKM2, sEKM2)
+	require.NotEqual(t, cEKM, cEKM2,
+		"a reconnect must export a fresh secret on the parrot path as well")
 }

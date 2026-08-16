@@ -6,7 +6,7 @@ toolchain go1.25.1
 
 require (
 	github.com/chameleon-protocol/chameleon/core/v2 v2.0.0-00010101000000-000000000000
-	github.com/chameleon-protocol/quic-go v0.61.1-0.20260815030739-0acaf9d284cc
+	github.com/chameleon-protocol/quic-go v0.61.1-0.20260816042713-26292f14f1b2
 	github.com/database64128/tfo-go/v2 v2.3.3
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/libp2p/go-nat v1.0.1-0.20250821073202-01afc089f138
