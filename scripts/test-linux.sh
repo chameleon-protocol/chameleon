@@ -56,7 +56,12 @@ exec "${run[@]}" \
       # it matches nothing rather than reporting that as a failure.
       (cd "$m" && go list '"${args[*]}"' >/dev/null 2>&1) || continue
       echo "=== $m ==="
-      (cd "$m" && go test -count=1 '"${args[*]}"' 2>&1 | grep -E "^(ok|FAIL|--- )") || fail=1
+      # The output is filtered after the run, not piped through grep during it.
+      # Piping handed the exit status to grep, which succeeds precisely when a
+      # test has failed, because the FAIL line is one of the lines it matches.
+      # This script reported success for every failing run it ever had.
+      (cd "$m" && go test -count=1 '"${args[*]}"' > /tmp/out.$m 2>&1) || fail=1
+      grep -E "^(ok|FAIL|--- )" /tmp/out.$m
     done
     exit $fail
   '
