@@ -286,6 +286,61 @@ func TestClientConfigParseInvalidRealmAddr(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// A realm address plus port hopping must fail to start rather than run with one
+// of the two silently absent. The message is spelled out here rather than built
+// from the code under test, so that changing the wording to something that no
+// longer names both halves of the conflict fails this test.
+func TestClientConfigRealmRefusesPortHopping(t *testing.T) {
+	const (
+		wantHop   = "port hopping (transport.udp.hopInterval, or minHopInterval and maxHopInterval)"
+		wantRealm = "cannot be used with a realm server address"
+	)
+	tests := []struct {
+		name string
+		udp  clientConfigTransportUDP
+	}{
+		{"hopInterval", clientConfigTransportUDP{HopInterval: 30 * time.Second}},
+		{"min and max", clientConfigTransportUDP{MinHopInterval: 10 * time.Second, MaxHopInterval: 30 * time.Second}},
+		// An interval range that hopIntervalConfig would itself reject still
+		// expresses the intent to hop, so the interlock must fire on it too --
+		// and must fire with its own message, not with the range complaint.
+		{"min only", clientConfigTransportUDP{MinHopInterval: 10 * time.Second}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			c := &clientConfig{Server: "realm://token@example.com/my-realm"}
+			c.Transport.UDP = test.udp
+			cfg, err := c.Config()
+			assert.Nil(t, cfg)
+			if assert.Error(t, err) {
+				assert.Contains(t, err.Error(), wantHop)
+				assert.Contains(t, err.Error(), wantRealm)
+			}
+		})
+	}
+}
+
+// The control for the test above: the interlock has to key on the port-hopping
+// settings, not on realm mode, or it would be indistinguishable from "realm
+// addresses never load". Config() is not called here because a realm config
+// without the conflict goes on to open a socket and talk to STUN.
+func TestClientConfigRealmWithoutPortHoppingPassesInterlock(t *testing.T) {
+	c := &clientConfig{Server: "realm://token@example.com/my-realm"}
+	assert.NoError(t, c.checkHopVersusRealm())
+}
+
+// And the other control: the interlock must not have cost anyone port hopping
+// on a plain server address, which is every existing user of it.
+func TestClientConfigPortHoppingWithoutRealmStillWorks(t *testing.T) {
+	c := &clientConfig{Server: "127.0.0.1:20000-20010"}
+	c.Transport.UDP.HopInterval = 30 * time.Second
+	cfg, err := c.Config()
+	assert.NoError(t, err)
+	if assert.NotNil(t, cfg) {
+		assert.Equal(t, "udphop", cfg.ServerAddr.Network())
+	}
+}
+
 func TestSingleUseConnFactory(t *testing.T) {
 	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	assert.NoError(t, err)

@@ -390,6 +390,14 @@ func (c *clientConfig) wrapObfs(conn net.PacketConn) (net.PacketConn, error) {
 	}
 }
 
+// hopRequested reports whether any of the port-hopping interval settings was
+// asked for, however malformed. It is deliberately not hopIntervalConfig() != 0:
+// the interlock in realmConfig has to fire on the user's intent, and an intent
+// expressed with a bad interval still means "I want port hopping".
+func (c clientConfigTransportUDP) hopRequested() bool {
+	return c.HopInterval != 0 || c.MinHopInterval != 0 || c.MaxHopInterval != 0
+}
+
 func (c clientConfigTransportUDP) hopIntervalConfig() (udphop.HopIntervalConfig, error) {
 	if c.HopInterval != 0 && (c.MinHopInterval != 0 || c.MaxHopInterval != 0) {
 		return udphop.HopIntervalConfig{}, errors.New("hopInterval cannot be used together with minHopInterval or maxHopInterval")
@@ -732,6 +740,41 @@ func (c *clientConfig) Config() (*client.Config, error) {
 	return hyConfig, nil
 }
 
+// checkHopVersusRealm refuses a config that asks for UDP port hopping and a
+// realm server address at once.
+//
+// The two are both answers to "the obvious path is blocked", so wanting both is
+// a reasonable thing to want. They cannot be had together yet, and the reason is
+// structural rather than a missing feature: port hopping is implemented by a
+// PacketConn that discards addresses in both directions (see the contract note
+// on udpHopPacketConn.ReadFrom), while realm mode exists to move a live
+// connection between candidate addresses. Stacked, the hop conn swallows every
+// address the layer above chooses, so the switch is a silent no-op -- the
+// connection keeps talking to whichever port the hop timer last picked, and
+// nothing above ever learns that its decision was thrown away.
+//
+// Today the combination is not silently broken so much as silently ignored: a
+// realm address never reaches the port-hopping conn factory at all, so a user
+// who writes both gets no hopping and no warning. Either way the failure is
+// invisible, which on a censored network is the worst kind: the connection dies
+// and the only mechanism the user reached for was never running.
+//
+// This is an interlock, not a verdict. The fix is for port hopping to become a
+// source of candidates rather than a conn that hides them, at which point the
+// two stop competing and this check goes away.
+func (c *clientConfig) checkHopVersusRealm() error {
+	if !c.Transport.UDP.hopRequested() {
+		return nil
+	}
+	return configError{
+		Field: "transport.udp",
+		Err: errors.New("port hopping (transport.udp.hopInterval, or minHopInterval and maxHopInterval)" +
+			" cannot be used with a realm server address: both of them move the connection to a new" +
+			" address, and stacked they cancel each other out rather than combine." +
+			" Use either a realm server address or a port range with the hop interval settings, not both"),
+	}
+}
+
 func (c *clientConfig) parseRealmAddr() (*realm.Addr, bool, error) {
 	addr, err := realm.ParseAddr(c.Server)
 	if err == nil {
@@ -744,6 +787,12 @@ func (c *clientConfig) parseRealmAddr() (*realm.Addr, bool, error) {
 }
 
 func (c *clientConfig) realmConfig(addr *realm.Addr) (*client.Config, error) {
+	// Refuse before the socket, before STUN and before the rendezvous request:
+	// a config we will not honour must not cost the user a round trip, and must
+	// not announce addresses on their behalf.
+	if err := c.checkHopVersusRealm(); err != nil {
+		return nil, err
+	}
 	logger.Debug("realm client mode detected",
 		zap.String("realm", addr.RealmID),
 		zap.String("realmServer", addr.HostPort),

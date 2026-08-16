@@ -224,6 +224,31 @@ func (u *udpHopPacketConn) hop(hopInterval time.Duration) {
 	}
 }
 
+// ReadFrom and WriteTo below do not honour addresses, and that is the whole
+// mechanism rather than an oversight: hopping works by rotating the server port
+// underneath a QUIC connection that must not notice, so the address the layer
+// above sees has to stay constant while the address on the wire changes.
+//
+// The consequence is worth stating plainly, because it is invisible from above.
+// ReadFrom reports u.Addr -- a udphop address naming the whole port range, not
+// even a *net.UDPAddr -- for every packet, whatever port it really arrived on.
+// WriteTo ignores its addr argument entirely. quic-go's send path is
+// sconn.Write -> writePacket(p, ai.addr, ...) -> PacketConn.WriteTo(b, addr),
+// where ai.addr is exactly what (*quic.Conn).SetRemoteAddr sets. So moving a
+// live connection to a different remote address is, through this conn, a silent
+// no-op: the CompareAndSwap succeeds, the caller believes the connection moved,
+// and packets keep going to u.Addrs[u.addrIndex]. Nothing returns an error and
+// nothing logs.
+//
+// Anything that steers a connection between candidate addresses therefore
+// cannot be layered over this conn; app/cmd refuses the combination at startup
+// rather than let it fail this quietly. Making them coexist is not a matter of
+// honouring the addr argument here, either. Honouring it would stop the hopping
+// dead, since nothing above varies the destination -- the ports would have to
+// become candidates offered upward, chosen and committed by the same machinery
+// that handles every other candidate, and hopping would become one strategy for
+// generating them rather than a separate mechanism holding the address space
+// shut.
 func (u *udpHopPacketConn) ReadFrom(b []byte) (n int, addr net.Addr, err error) {
 	for {
 		select {
