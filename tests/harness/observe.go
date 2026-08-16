@@ -46,6 +46,15 @@ type Observation struct {
 	// the observation, only fail one sample of it.
 	ExchangeTimeout time.Duration
 
+	// MaxExchanges caps how many exchanges the load performs, zero meaning
+	// unbounded. Once the cap is reached the loader stops sending but holds its
+	// tunnelled connection open until the observation ends, so what is being
+	// observed is an idle application on a live connection rather than a
+	// teardown -- which is the state most of a censored user's session is
+	// actually in, and the state in which the only thing that produces evidence
+	// of the far end is the QUIC keep-alive. Ignored when Bulk is set.
+	MaxExchanges int
+
 	// Sample is the interval at which PathStats() is read.
 	Sample time.Duration
 
@@ -233,6 +242,12 @@ func (e *Env) runLoad(o Observation, origin time.Time, stop <-chan struct{}) []E
 			return out
 		default:
 		}
+		if o.MaxExchanges > 0 && len(out) >= o.MaxExchanges {
+			// Done sending, but still here: the tunnelled connection stays open
+			// and is closed by the deferred Close when the observation ends.
+			<-stop
+			return out
+		}
 		at := time.Since(origin)
 		if conn == nil {
 			c, err := e.Client.TCP(e.TCPEcho)
@@ -376,9 +391,12 @@ type Signature struct {
 	TxSpan  time.Duration
 
 	// LostDelta is the change in PacketsLost across the post-fault window and
-	// LostStepMin the most negative single-interval change. Both are always
-	// zero in this fork; see TestPacketsLostIsNeverPopulated for why, and do not
-	// design anything around them.
+	// LostStepMin the most negative single-interval change. Both stay at zero
+	// whenever core/client has replaced the congestion controller, which is
+	// every shipped configuration: quic-go writes PacketsLost only from its own
+	// sender. Configure CongestionConfig.Type "reno" and they move. See
+	// TestPacketsLostNeedsTheControllerWeReplace, and do not design a detector
+	// around them.
 	LostDelta   int64
 	LostStepMin int64
 

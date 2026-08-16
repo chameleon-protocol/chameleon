@@ -63,6 +63,16 @@ type Options struct {
 	// configured controller (BBR) whenever either side's declaration is zero.
 	// Without this an Env measures BBR no matter what the profile says.
 	Bandwidth Bandwidth
+
+	// Congestion is the client's CongestionConfig.Type: "" or "bbr" for BBR,
+	// "reno" to leave quic-go's own sender in place. It is the one setting that
+	// decides whether core/client replaces the connection's congestion
+	// controller at all, and replacing it is what silences quic-go's loss
+	// counters -- see TestPacketsLostNeedsTheControllerWeReplace.
+	//
+	// It has no effect while Bandwidth declares a rate: a declared rate installs
+	// Brutal whatever this says.
+	Congestion string
 }
 
 // Bandwidth is what both ends declare to each other during authentication. The
@@ -208,6 +218,7 @@ func dialClient(t testing.TB, ctrl *netem.Controller, serverAddr net.Addr, opts 
 				MaxRx:                   opts.Bandwidth.BytesPerSec,
 				DisableLossCompensation: opts.Bandwidth.DisableLossCompensation,
 			},
+			CongestionConfig: client.CongestionConfig{Type: opts.Congestion},
 		}, nil
 	}
 

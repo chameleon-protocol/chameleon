@@ -72,6 +72,19 @@ var (
 //
 // ResetPathState blocks until the reset has run on the connection's own
 // goroutine, which is what makes step 3 safe to do from this one.
+//
+// A switch onto a connection that is already finished reports ErrNoConnection
+// rather than success, because a selector calls this on exactly the connection
+// it suspects is dead and a false success there is a selector that believes it
+// has recovered and stops trying. The liveness of the connection is read from
+// its context, which quic-go cancels when the connection closes for any reason
+// -- our own Close, the peer's, or the idle timeout. c.conn itself is no help:
+// it is assigned once at the end of connect and never cleared, so it is nil
+// only before this client has ever had a connection.
+//
+// The check cannot be raceless -- a connection may die in the instant after it
+// -- and it is not trying to be. It removes the case a selector actually meets,
+// a connection that has been dead for as long as it took to notice.
 func (c *clientImpl) SwitchTo(addr net.Addr) error {
 	if addr == nil {
 		return errors.New("switch to a nil address")
@@ -81,11 +94,19 @@ func (c *clientImpl) SwitchTo(addr net.Addr) error {
 	// default Reno sender rather than anything anybody asked for.
 	c.pathMu.Lock()
 	defer c.pathMu.Unlock()
-	if c.conn == nil {
+	if c.conn == nil || c.conn.Context().Err() != nil {
 		return ErrNoConnection
 	}
 	c.conn.SetRemoteAddr(addr)
 	c.conn.ResetPathState()
+	// ResetPathState returns without resetting anything if the connection died
+	// while it was waiting for the run loop (quic-go's connection.go: it selects
+	// on the connection's context in both directions). Reporting success then
+	// would be the same false success by another door -- step 2 did not happen,
+	// so the caller would be told a switch it can rely on had taken place.
+	if c.conn.Context().Err() != nil {
+		return ErrNoConnection
+	}
 	c.installCongestionControl(c.conn)
 	return nil
 }

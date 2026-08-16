@@ -253,6 +253,35 @@ func TestSwitchToKeepsTheNegotiatedCongestionController(t *testing.T) {
 		"a rate-based controller sends the declared rate through this loss; a loss-based one does not")
 }
 
+// TestSwitchToOnADeadConnection is the call a Selector makes first, on exactly
+// the connection it suspects is dead.
+//
+// clientImpl.conn is assigned once, at the end of connect, and never cleared,
+// so the `c.conn == nil` guard SwitchTo rested on cannot fire on a plain
+// client: before this test a closed connection took the switch and reported
+// success, and Current() then named the address it claimed to have moved to.
+// A selector reading that believes it has recovered and stops trying.
+//
+// Mutation: with the connection-liveness checks removed from SwitchTo this
+// fails with 'Expected error with "no connection to switch" in chain but got
+// nil', and the Current() assertion below with 'expected: "127.0.0.1:55706"
+// actual: "127.0.0.1:56752"' -- the switch having moved the address of a
+// connection that no longer exists.
+func TestSwitchToOnADeadConnection(t *testing.T) {
+	env := harness.New(t, harness.Options{Seed: 26, Candidates: 2})
+	legs := env.Paths.Legs
+	require.NoError(t, env.Echo(probeTimeout))
+
+	pc, ok := env.Client.(client.PathController)
+	require.True(t, ok)
+	before := pc.Current().String()
+	require.NoError(t, env.Client.Close())
+
+	assert.ErrorIs(t, pc.SwitchTo(legs[1].Addr()), client.ErrNoConnection)
+	assert.Equal(t, before, pc.Current().String(),
+		"a refused switch reported the address it refused to move to")
+}
+
 // TestSwitchToWithNothingToSwitch is the state a reconnecting client is in
 // between attempts. Asking it to move must not be the thing that dials.
 func TestSwitchToWithNothingToSwitch(t *testing.T) {
