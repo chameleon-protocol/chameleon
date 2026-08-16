@@ -5,7 +5,7 @@ go 1.25.0
 toolchain go1.25.1
 
 require (
-	github.com/chameleon-protocol/quic-go v0.61.1-0.20260816042713-26292f14f1b2
+	github.com/chameleon-protocol/quic-go v0.61.1-0.20260816085948-882950b8fa93
 	github.com/refraction-networking/utls v1.8.2
 	github.com/stretchr/testify v1.11.1
 	go.uber.org/goleak v1.3.0

@@ -93,19 +93,135 @@ func TestBrutalHoldsRateThroughLoss(t *testing.T) {
 	// controller that backs off would land far below this.
 	assert.Greater(t, on.Goodput, 0.7*float64(declared),
 		"Brutal must not treat random loss as a reason to slow down")
-	// Compensation is the whole reason the ackRate divisor exists. If this stops
-	// holding, the divisor is doing nothing and should be deleted rather than
-	// kept for its externalities.
+	// This second assertion is narrower than it looks, and the narrowness is
+	// deliberate rather than an oversight: what it says is that switching
+	// compensation on is not a net cost at 5% loss, and that is all it says. It
+	// cannot detect a divisor that does nothing, because a divisor that does
+	// nothing makes the two cells identical and satisfies it.
 	//
 	// The tolerance is not slack, it is the measurement. The two cells are
 	// separate transfers, and the run-to-run spread on this bed is 3-5% while
-	// the effect being tested is about 4% -- so a strict inequality on a single
+	// the effect at 5% loss is about 4% -- so a strict inequality on a single
 	// pair is a coin flip on the noise, and it does come up tails: on the
 	// unmodified controller it was 1.63 against 1.64 MB/s, and under the race
-	// detector, where the spread is wider, 1.72 against 1.78. What is worth
-	// asserting is that compensation is not a net cost, which this is.
+	// detector, where the spread is wider, 1.72 against 1.78.
+	//
+	// "The divisor is doing something" is therefore asserted where the effect is
+	// bigger than the noise instead of here, in
+	// TestBrutalCompensationOutsendsItsAbsence.
 	assert.GreaterOrEqual(t, on.Goodput, off.Goodput*0.97,
-		"loss compensation must buy back at least what it costs")
+		"loss compensation must not be a net cost")
+}
+
+// TestBrutalCompensationOutsendsItsAbsence is the assertion that the ackRate
+// divisor does anything at all. If it fails, the divisor can be deleted; the
+// case for keeping it rests on this and nothing else.
+//
+// It is measured at 20% loss and not at the 5% the test above uses, because
+// only at 20% does the effect clear this bed's noise. ackRate is
+// ackCount/(ackCount+lossCount) with a floor of minAckRate = 0.8, so the send
+// rate compensation asks for is declared/ackRate: 1.05x at 5% loss, which is
+// inside a 3-5% run-to-run spread, and the full 1.25x at 20%, which is not.
+//
+// What is compared is the rate bytes were offered to the link at, not goodput.
+// Goodput is what the extra bytes buy, and at 20% loss that is a second-order
+// question tangled up with retransmission timing; the rate is what the divisor
+// directly decides, and the pacer is the only thing between the two. Measured
+// with the two cells as fixed-size transfers first, the ratio came out at 1.147
+// and 1.089 on consecutive runs -- because a fixed-size transfer's duration is
+// decided by when its last retransmission landed, which at this loss rate is
+// worth more than the effect. Backlogged for a fixed ten seconds instead, the
+// same comparison gave 1.244, 1.227, 1.246, 1.258 and 1.238 over five runs,
+// with the absolute figures landing on the arithmetic: 2.44-2.47 MB/s against a
+// declared 2.00, and 1.96-1.99 MB/s with the divisor switched off.
+//
+// The bound is therefore 1.12: two thirds of the way from the inert value to
+// the observed minimum, which is far enough below the measurement to survive a
+// slower host and far enough above 1.00 to fail on a divisor that has quietly
+// stopped dividing. It was not exercised under the race detector -- the test
+// image has no cgo -- so the margin is sized for a spread wider than the one
+// measured.
+func TestBrutalCompensationOutsendsItsAbsence(t *testing.T) {
+	if testing.Short() {
+		t.Skip("two backlogged flows over a 20% lossy link, several seconds each")
+	}
+	const declared = 2 << 20
+	const runFor = 10 * time.Second
+	profile := netem.RTT(50 * time.Millisecond).WithLoss(0.20).Named("rtt50ms+loss20%")
+
+	on := offeredRate(t, profile, harness.Bandwidth{BytesPerSec: declared}, runFor)
+	off := offeredRate(t, profile, harness.Bandwidth{
+		BytesPerSec:             declared,
+		DisableLossCompensation: true,
+	}, runFor)
+
+	ratio := on / off
+	t.Logf("at 20%% loss over %v, compensation offered %s against %s, x%.3f",
+		runFor, metrics.FormatRate(on), metrics.FormatRate(off), ratio)
+	assert.Greater(t, ratio, 1.12,
+		"loss compensation is not raising the send rate: the ackRate divisor is inert")
+}
+
+// offeredRate runs a backlogged flow for d and reports how fast its uplink
+// offered bytes to the link, from the link's own counters.
+//
+// A fixed duration rather than a fixed size, and a rate rather than a total,
+// because the send rate is what the divisor decides and both other framings
+// hide it. A fixed-size transfer at this loss rate ends on whenever its last
+// retransmission happened to land, which is worth several percent of the
+// elapsed time on its own; a total over a fixed duration is the same figure as
+// the rate but harder to compare against the declaration.
+func offeredRate(t *testing.T, profile netem.Profile, bw harness.Bandwidth, d time.Duration) float64 {
+	t.Helper()
+	env := harness.New(t, harness.Options{Profile: profile, Seed: 7, Bandwidth: bw})
+	base := env.Ctrl.Stats()
+	start := time.Now()
+	_, err := env.TCPLoadFor(env.Client, d)
+	elapsed := time.Since(start)
+	require.NoError(t, err)
+	st := env.Ctrl.Stats()
+	offered := st.Up.InBytes - base.Up.InBytes
+	rate := float64(offered) / elapsed.Seconds()
+	t.Logf("declared %s, compensation=%v: offered %dB in %v = %s, drop %.2f%%",
+		metrics.FormatRate(float64(bw.BytesPerSec)), !bw.DisableLossCompensation,
+		offered, elapsed.Round(10*time.Millisecond), metrics.FormatRate(rate),
+		st.Up.LossRate()*100)
+	return rate
+}
+
+// TestBrutalDeliversItsRateOnALongPath is the case the deployment actually
+// looks like: a client in a censored network and a server outside it, so the
+// path is long from the first packet rather than having grown that way.
+//
+// It is the gap between the two path tests that already exist.
+// TestBrutalRunsOnShortPaths covers a round trip near zero, which is where the
+// window collapsed; TestBrutalSurvivesAPathDelayRise covers a round trip that
+// went up under the sender, which is where the clamp binds. Neither says
+// anything about a path that was always 200ms, and that one is decided by
+// different arithmetic: the window is 2 x bps x minRTT with minRTT the real
+// path, so it exceeds what the rate needs by construction, and the only other
+// thing that could bind is flow control -- the BDP here is 20 Mbps x 200ms =
+// 500KB against the core's 8MB stream and 20MB connection windows.
+//
+// The bound is 0.7 of the declaration, which is the same figure the two tests
+// above use and is not a fresh invention. It has a great deal of room: measured
+// over four runs the 200ms case came in at 0.870, 0.863, 0.860 and 0.840 of the
+// declaration, against 0.958-0.974 at a zero round trip, and the whole of that
+// gap is the transfer's first round trip, which a 4MB transfer at this rate
+// spends about 12% of its life in. A tighter bound would be asserting the
+// startup transient rather than the steady state.
+func TestBrutalDeliversItsRateOnALongPath(t *testing.T) {
+	if testing.Short() {
+		t.Skip("a full transfer over a 200ms path")
+	}
+	const declared = 20e6 / 8 // 20 Mbps expressed the way the config wants it
+	r := measureBrutal(t, netem.RTT(200*time.Millisecond),
+		harness.Bandwidth{BytesPerSec: declared}, longTransfer)
+	t.Logf("declared %s over a 200ms path: %s, %.1f%% of the declaration",
+		metrics.FormatRate(declared), metrics.FormatRate(r.Goodput), r.Goodput/declared*100)
+
+	assert.Greater(t, r.Goodput, 0.7*float64(declared),
+		"a long path is not a reason to deliver less than the declared rate")
 }
 
 // TestBrutalOverDeclarationCost measures what an over-declared rate does to a

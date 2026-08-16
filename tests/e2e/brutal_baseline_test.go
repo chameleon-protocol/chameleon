@@ -16,14 +16,27 @@ import (
 // Baseline measurements of Brutal as shipped, on a real client and a real
 // server over the user-space impaired link.
 //
-// These are not assertions. They print tables, and the tables are the
-// deliverable: they are what a repair gets compared against. Run them with
+// These are not tests and are deliberately not named as such. They print
+// tables, and the tables are the deliverable: they are what a repair gets
+// compared against. Nothing here guards anything -- the only failure any of
+// them can report is the harness failing to complete a transfer, which is a
+// statement about the bed and not about the controller. The properties the
+// congestion-control repairs are accountable for are asserted in
+// brutal_test.go, brutal_repair_test.go and the brutal package's own tests; if
+// you are looking for coverage, it is there and not here.
 //
-//	go test ./e2e/ -run Baseline -v -timeout 30m
+// They are benchmarks because that is the only shape the go tool offers for
+// "runnable, but not part of the verdict": `go test` will not run them, so the
+// four minutes they take cannot masquerade as a passing suite -- which is what
+// they did as Test functions, and is most of why this package took six. The
+// ns/op figure they report is meaningless: one iteration is a whole campaign,
+// not an operation. Run them with
 //
-// Nothing here is skipped under -short except by shrinking the transfers,
-// because a truncated run of a congestion-control measurement is not a smaller
-// measurement, it is a different one.
+//	go test ./e2e/ -run '^$' -bench Baseline -benchtime 1x -v
+//
+// -benchtime 1x because each body is one full campaign. At the default one
+// second the tool would settle on a single iteration anyway, since the first
+// one takes far longer than that, but saying so is cheaper than relying on it.
 //
 // What the numbers are and are not:
 //
@@ -87,9 +100,9 @@ func (r wireReport) wireRate() float64 {
 // The probe matters: on an idle link every controller looks the same, and the
 // cost of a send rate only appears as queueing that someone else has to wait
 // behind.
-func runBaseline(t *testing.T, profile netem.Profile, bw harness.Bandwidth, size int, idle time.Duration) wireReport {
-	t.Helper()
-	env := harness.New(t, harness.Options{
+func runBaseline(b *testing.B, profile netem.Profile, bw harness.Bandwidth, size int, idle time.Duration) wireReport {
+	b.Helper()
+	env := harness.New(b, harness.Options{
 		Profile:        profile,
 		Seed:           baselineSeed,
 		Bandwidth:      bw,
@@ -109,7 +122,7 @@ func runBaseline(t *testing.T, profile netem.Profile, bw harness.Bandwidth, size
 	bps, err := env.TCPThroughput(size, 120*time.Second)
 	elapsed := time.Since(start)
 	wg.Wait()
-	require.NoError(t, err)
+	require.NoError(b, err)
 
 	st := env.Ctrl.Stats()
 	return wireReport{
@@ -126,18 +139,22 @@ func runBaseline(t *testing.T, profile netem.Profile, bw harness.Bandwidth, size
 	}
 }
 
-// TestBaselineLossCompensation is scenario 1: does Brutal put more bytes on the
-// wire as loss climbs, and does the extra buy anything?
+// BenchmarkBaselineLossCompensation is scenario 1: does Brutal put more bytes
+// on the wire as loss climbs, and does the extra buy anything?
 //
 // The profile carries 50ms of RTT on purpose. A pure-loss profile on loopback
 // puts SRTT under a millisecond, which collapses the congestion window to a
-// single datagram and measures that defect instead of this one; the collapse
-// gets its own cell below.
-func TestBaselineLossCompensation(t *testing.T) {
-	size := longTransfer
-	if testing.Short() {
-		size = shortTransfer
-	}
+// single datagram and measures that defect instead of this one.
+//
+// The 20% cell of this sweep is the one that turned out to be assertable, and
+// it has been promoted out of here into TestBrutalCompensationOutsendsItsAbsence
+// with a bound measured over repeated runs. What is left is the shape of the
+// curve between 0 and 20%, which is a picture and not a threshold: the effect
+// at 1% and 5% is smaller than this bed's run-to-run spread, so no row below
+// the ackRate floor can carry an assertion without a measurement campaign per
+// row.
+func BenchmarkBaselineLossCompensation(b *testing.B) {
+	const size = longTransfer
 	// 20% is past the point where ackRate hits its 0.8 floor, which is the only
 	// place the "sends 25% more" ceiling is actually reached.
 	losses := []float64{0, 0.01, 0.05, 0.10, 0.20}
@@ -147,96 +164,60 @@ func TestBaselineLossCompensation(t *testing.T) {
 		comp bool
 		r    wireReport
 	}
-	var cells []cell
-	for _, loss := range losses {
-		for _, comp := range []bool{true, false} {
-			profile := netem.RTT(50 * time.Millisecond).WithLoss(loss).
-				Named(fmt.Sprintf("rtt50ms+loss%.3g%%", loss*100))
-			name := fmt.Sprintf("loss%.3g%%/comp=%v", loss*100, comp)
-			var r wireReport
-			t.Run(name, func(t *testing.T) {
-				r = runBaseline(t, profile, harness.Bandwidth{
+	for range b.N {
+		var cells []cell
+		for _, loss := range losses {
+			for _, comp := range []bool{true, false} {
+				profile := netem.RTT(50 * time.Millisecond).WithLoss(loss).
+					Named(fmt.Sprintf("rtt50ms+loss%.3g%%", loss*100))
+				r := runBaseline(b, profile, harness.Bandwidth{
 					BytesPerSec:             baselineDeclared,
 					DisableLossCompensation: !comp,
 				}, size, 0)
-			})
-			cells = append(cells, cell{loss, comp, r})
+				cells = append(cells, cell{loss, comp, r})
+			}
 		}
-	}
 
-	t.Logf("declared %s, %d byte echo, seed %d", metrics.FormatRate(baselineDeclared), size, baselineSeed)
-	t.Logf("%-8s %-6s %-12s %-8s %-10s %-14s %-12s %-10s %-10s %-10s",
-		"loss", "comp", "goodput", "vs decl", "elapsed", "wire bytes", "wire rate", "up drop", "p50", "p99")
-	for _, c := range cells {
-		t.Logf("%-8s %-6v %-12s %-8.3f %-10v %-14d %-12s %-10.2f %-10v %-10v",
-			fmt.Sprintf("%.3g%%", c.loss*100), c.comp,
-			metrics.FormatRate(c.r.Goodput), c.r.Goodput/baselineDeclared,
-			c.r.Elapsed.Round(10*time.Millisecond),
-			c.r.wireBytes(), metrics.FormatRate(c.r.wireRate()),
-			c.r.UpDrop*100, c.r.LatencyP5.Round(time.Millisecond), c.r.LatencyP9.Round(time.Millisecond))
-	}
-
-	// The paired comparison the scenario is about: at the same loss and the same
-	// seed, what did the divisor add and what did it buy?
-	for _, loss := range losses {
-		var on, off wireReport
+		b.Logf("declared %s, %d byte echo, seed %d", metrics.FormatRate(baselineDeclared), size, baselineSeed)
+		b.Logf("%-8s %-6s %-12s %-8s %-10s %-14s %-12s %-10s %-10s %-10s",
+			"loss", "comp", "goodput", "vs decl", "elapsed", "wire bytes", "wire rate", "up drop", "p50", "p99")
 		for _, c := range cells {
-			if c.loss != loss {
+			b.Logf("%-8s %-6v %-12s %-8.3f %-10v %-14d %-12s %-10.2f %-10v %-10v",
+				fmt.Sprintf("%.3g%%", c.loss*100), c.comp,
+				metrics.FormatRate(c.r.Goodput), c.r.Goodput/baselineDeclared,
+				c.r.Elapsed.Round(10*time.Millisecond),
+				c.r.wireBytes(), metrics.FormatRate(c.r.wireRate()),
+				c.r.UpDrop*100, c.r.LatencyP5.Round(time.Millisecond), c.r.LatencyP9.Round(time.Millisecond))
+		}
+
+		// The paired comparison the scenario is about: at the same loss and the
+		// same seed, what did the divisor add and what did it buy?
+		for _, loss := range losses {
+			var on, off wireReport
+			for _, c := range cells {
+				if c.loss != loss {
+					continue
+				}
+				if c.comp {
+					on = c.r
+				} else {
+					off = c.r
+				}
+			}
+			if off.wireBytes() == 0 {
 				continue
 			}
-			if c.comp {
-				on = c.r
-			} else {
-				off = c.r
-			}
+			b.Logf("loss %.3g%%: compensation put x%.3f bytes on the wire, at x%.3f the rate, for x%.3f the goodput",
+				loss*100,
+				float64(on.wireBytes())/float64(off.wireBytes()),
+				on.wireRate()/off.wireRate(),
+				on.Goodput/off.Goodput)
 		}
-		if off.wireBytes() == 0 {
-			continue
-		}
-		t.Logf("loss %.3g%%: compensation put x%.3f bytes on the wire, at x%.3f the rate, for x%.3f the goodput",
-			loss*100,
-			float64(on.wireBytes())/float64(off.wireBytes()),
-			on.wireRate()/off.wireRate(),
-			on.Goodput/off.Goodput)
 	}
 }
 
-// TestBaselineCwndFloorOnFastPaths is the mirror case the profile above avoids:
-// the same loss with no added delay, where SRTT is a few hundred microseconds
-// and cwnd = bps x SRTT x 2 is one or two datagrams.
-//
-// It runs with a short idle timeout because the expected outcome for the low
-// declarations is that the connection stops making progress; without the bound
-// each cell would sit for the default 30s.
-func TestBaselineCwndFloorOnFastPaths(t *testing.T) {
-	if testing.Short() {
-		t.Skip("cells here are expected to stall, and stalling takes the idle timeout")
-	}
-	profile := netem.Loss(0.05)
-	t.Logf("%-14s %-14s %-12s %-10s", "declared", "goodput", "vs declared", "outcome")
-	for _, declared := range []uint64{1 << 20, 2 << 20, 8 << 20, 64 << 20} {
-		declared := declared
-		t.Run(metrics.FormatRate(float64(declared)), func(t *testing.T) {
-			env := harness.New(t, harness.Options{
-				Profile:        profile,
-				Seed:           baselineSeed,
-				Bandwidth:      harness.Bandwidth{BytesPerSec: declared},
-				MaxIdleTimeout: 4 * time.Second,
-			})
-			bps, err := env.TCPThroughput(2<<20, 25*time.Second)
-			outcome := "completed"
-			if err != nil {
-				outcome = "stalled: " + err.Error()
-				bps = 0
-			}
-			t.Logf("%-14s %-14s %-12.3f %-10s", metrics.FormatRate(float64(declared)),
-				metrics.FormatRate(bps), bps/float64(declared), outcome)
-		})
-	}
-}
-
-// TestBaselineStandingQueue is scenario 2: on a link with a finite rate and a
-// finite buffer, does the round trip climb as the transfer runs?
+// BenchmarkBaselineStandingQueue is scenario 2: on a link with a finite rate
+// and a finite buffer, does the round trip climb as the transfer runs?
 //
 // cwnd is not observable from here -- it is internal to the core, and the tests
 // module cannot import it. What is observable is the queue it permits: a window
@@ -244,21 +225,22 @@ func TestBaselineCwndFloorOnFastPaths(t *testing.T) {
 // queue, so the standing queue grows until the buffer tail-drops. The series
 // below is that state, sampled over the life of the transfer.
 //
+// The bound this produced is asserted, at the 2x declaration, by the p99 check
+// in TestBrutalOverDeclarationCost. What stays here is the time series, which
+// no single percentile can express and which is the reason a bound was
+// believable in the first place.
+//
 // The probe stops when the transfer does. Samples taken after it would be
 // measuring an idle link, and averaging those in would understate the queue by
 // however long the probe outlived the load.
-func TestBaselineStandingQueue(t *testing.T) {
-	if testing.Short() {
-		t.Skip("needs a transfer long enough for a queue to build")
-	}
+func BenchmarkBaselineStandingQueue(b *testing.B) {
 	const linkRate = 1 << 20
 	const baseRTT = 50 * time.Millisecond
 	profile := netem.RateLimited(linkRate).WithRTT(baseRTT).Named("rate1MB/s+rtt50ms")
 
-	for _, declared := range []uint64{linkRate, 2 * linkRate, 8 * linkRate} {
-		declared := declared
-		t.Run(metrics.FormatRate(float64(declared)), func(t *testing.T) {
-			env := harness.New(t, harness.Options{
+	for range b.N {
+		for _, declared := range []uint64{linkRate, 2 * linkRate, 8 * linkRate} {
+			env := harness.New(b, harness.Options{
 				Profile:   profile,
 				Seed:      baselineSeed,
 				Bandwidth: harness.Bandwidth{BytesPerSec: declared},
@@ -280,10 +262,10 @@ func TestBaselineStandingQueue(t *testing.T) {
 			elapsed := time.Since(start)
 			close(done)
 			wg.Wait()
-			require.NoError(t, err)
+			require.NoError(b, err)
 
 			st := env.Ctrl.Stats()
-			t.Logf("declared %s over a %s link, %v transfer: goodput %s, up offered %dB carried %dB drop %.2f%%",
+			b.Logf("declared %s over a %s link, %v transfer: goodput %s, up offered %dB carried %dB drop %.2f%%",
 				metrics.FormatRate(float64(declared)), metrics.FormatRate(linkRate),
 				elapsed.Round(100*time.Millisecond),
 				metrics.FormatRate(bps), st.Up.InBytes, st.Up.OutBytes, st.Up.LossRate()*100)
@@ -292,7 +274,7 @@ func TestBaselineStandingQueue(t *testing.T) {
 			// claim, and a hundred lines per cell buries it. The queue delay is
 			// the round trip minus the link's own 50ms, which is the part the
 			// controller is responsible for.
-			t.Logf("%-8s %-12s %-12s %-12s %-4s", "t", "min rtt", "max rtt", "min queue", "n")
+			b.Logf("%-8s %-12s %-12s %-12s %-4s", "t", "min rtt", "max rtt", "min queue", "n")
 			const bucket = time.Second
 			var (
 				lo, hi time.Duration
@@ -303,15 +285,15 @@ func TestBaselineStandingQueue(t *testing.T) {
 				if n == 0 {
 					return
 				}
-				t.Logf("%-8v %-12v %-12v %-12v %-4d", cur,
+				b.Logf("%-8v %-12v %-12v %-12v %-4d", cur,
 					lo.Round(time.Millisecond), hi.Round(time.Millisecond),
 					(lo - baseRTT).Round(time.Millisecond), n)
 			}
 			for _, s := range series {
-				b := s.At.Truncate(bucket)
-				if b != cur || n == 0 {
+				bk := s.At.Truncate(bucket)
+				if bk != cur || n == 0 {
 					flush()
-					cur, lo, hi, n = b, s.RTT, s.RTT, 0
+					cur, lo, hi, n = bk, s.RTT, s.RTT, 0
 				}
 				lo = min(lo, s.RTT)
 				hi = max(hi, s.RTT)
@@ -323,7 +305,7 @@ func TestBaselineStandingQueue(t *testing.T) {
 			for i, s := range series {
 				all[i] = s.RTT
 			}
-			t.Logf("round trip during the transfer: %s", metrics.Summarize(all))
+			b.Logf("round trip during the transfer: %s", metrics.Summarize(all))
 			// A standing queue is a floor, not a spike: the interesting statistic
 			// is how rarely the link was ever seen empty.
 			var bloated int
@@ -333,26 +315,36 @@ func TestBaselineStandingQueue(t *testing.T) {
 				}
 			}
 			if len(all) > 0 {
-				t.Logf("%d/%d exchanges (%.0f%%) saw more than 2x the link's own round trip",
+				b.Logf("%d/%d exchanges (%.0f%%) saw more than 2x the link's own round trip",
 					bloated, len(all), float64(bloated)/float64(len(all))*100)
 			}
-		})
+		}
 	}
 }
 
-// TestBaselineInteractiveFlow is scenario 3: what an interactive flow sees when
-// it is the only thing on the link.
+// BenchmarkBaselineInteractiveFlow is scenario 3: what an interactive flow sees
+// when it is the only thing on the link.
 //
 // 100 bytes every 50ms is roughly a shell session. The point of measuring it is
-// that this flow is below the rate at which Brutal's own feedback loop has
-// anything to work with -- see TestBaselineMinSampleCount in the brutal package
-// for where that floor is -- so its behaviour is decided by the pacer and the
-// window alone.
-func TestBaselineInteractiveFlow(t *testing.T) {
-	count := 200
-	if testing.Short() {
-		count = 40
-	}
+// where that lands relative to Brutal's sample floor, which is 50 packets over
+// a 5 second window -- 10 packets a second. It lands right on it: the exchanges
+// per second column reads 8.6 to 9.2 here, not the 20 the gap alone would
+// suggest, because the probe is closed-loop and its cadence is the gap plus the
+// round trip. So an interactive flow of this shape is at or just under the
+// floor, and its send rate is decided by the pacer and the window alone.
+//
+// There is no assertion here and none is available. The controller's own
+// verdict -- whether it is compensating -- is not observable from this module:
+// the brutal package is internal to the core, and its Stats is run-loop only.
+// The arithmetic half of the question is asserted where it can be, by
+// TestBaselineMinSampleCount in that package. What is left here is the achieved
+// exchange rate, which is the only end-to-end evidence about the floor there
+// is, and round trips on an otherwise idle link, which mostly measure the
+// profile's own delay -- and that is asserted by
+// TestLatencyPercentilesTrackConfiguredRTT, though on BBR, since that one
+// declares no bandwidth.
+func BenchmarkBaselineInteractiveFlow(b *testing.B) {
+	const count = 200
 	cases := []struct {
 		name    string
 		profile netem.Profile
@@ -366,97 +358,83 @@ func TestBaselineInteractiveFlow(t *testing.T) {
 	// more than anywhere else: Brutal's sample floor is a packet rate, and the
 	// difference between "every 50ms" and "every 50ms plus 52ms of path" is the
 	// difference between clearing the floor and not. The achieved rate is
-	// reported per row for exactly that reason.
-	t.Logf("100 byte exchanges, 50ms between them, declared %s",
-		metrics.FormatRate(baselineDeclared))
-	t.Logf("%-18s %-10s %-10s %-10s %-10s %-10s %-12s",
-		"profile", "p50", "p95", "p99", "max", "one-way p50", "exchanges/s")
-	for _, c := range cases {
-		env := harness.New(t, harness.Options{
-			Profile:   c.profile,
-			Seed:      baselineSeed,
-			Bandwidth: harness.Bandwidth{BytesPerSec: baselineDeclared},
-		})
-		series, err := env.LatencySeries(harness.Probe{
-			Count: count, Warmup: 3, Gap: 50 * time.Millisecond,
-			Payload: 100, Timeout: 20 * time.Second,
-		})
-		require.NoError(t, err)
-		samples := make([]time.Duration, len(series))
-		for i, s := range series {
-			samples[i] = s.RTT
+	// reported per row for exactly that reason, and it is the only end-to-end
+	// evidence available about the floor: ackRate itself is decided inside the
+	// controller, which this module cannot see.
+	for range b.N {
+		b.Logf("100 byte exchanges, 50ms between them, declared %s",
+			metrics.FormatRate(baselineDeclared))
+		b.Logf("%-18s %-10s %-10s %-10s %-10s %-10s %-12s",
+			"profile", "p50", "p95", "p99", "max", "one-way p50", "exchanges/s")
+		for _, c := range cases {
+			env := harness.New(b, harness.Options{
+				Profile:   c.profile,
+				Seed:      baselineSeed,
+				Bandwidth: harness.Bandwidth{BytesPerSec: baselineDeclared},
+			})
+			series, err := env.LatencySeries(harness.Probe{
+				Count: count, Warmup: 3, Gap: 50 * time.Millisecond,
+				Payload: 100, Timeout: 20 * time.Second,
+			})
+			require.NoError(b, err)
+			samples := make([]time.Duration, len(series))
+			for i, s := range series {
+				samples[i] = s.RTT
+			}
+			sum := metrics.Summarize(samples)
+			// The one-way figure is the round trip halved. Under a symmetric
+			// profile that is the right expectation, but it is arithmetic, not a
+			// measurement: nothing here can time a datagram in one direction only.
+			var perSec float64
+			if n := len(series); n > 1 && series[n-1].At > 0 {
+				perSec = float64(n-1) / series[n-1].At.Seconds()
+			}
+			b.Logf("%-18s %-10v %-10v %-10v %-10v %-10v %-12.1f", c.profile.Name,
+				sum.P50.Round(time.Millisecond),
+				metrics.Percentile(samples, 0.95).Round(time.Millisecond),
+				sum.P99.Round(time.Millisecond), sum.Max.Round(time.Millisecond),
+				(sum.P50 / 2).Round(time.Millisecond), perSec)
 		}
-		sum := metrics.Summarize(samples)
-		// The one-way figure is the round trip halved. Under a symmetric profile
-		// that is the right expectation, but it is arithmetic, not a measurement:
-		// nothing here can time a datagram in one direction only.
-		var perSec float64
-		if n := len(series); n > 1 && series[n-1].At > 0 {
-			perSec = float64(n-1) / series[n-1].At.Seconds()
-		}
-		t.Logf("%-18s %-10v %-10v %-10v %-10v %-10v %-12.1f", c.profile.Name,
-			sum.P50.Round(time.Millisecond),
-			metrics.Percentile(samples, 0.95).Round(time.Millisecond),
-			sum.P99.Round(time.Millisecond), sum.Max.Round(time.Millisecond),
-			(sum.P50 / 2).Round(time.Millisecond), perSec)
 	}
 }
 
-// TestBaselineInteractiveAckRate asks whether an interactive flow ever gets
-// past Brutal's sample floor, end to end rather than in simulation.
+// BenchmarkBaselineDeclaredVsAchieved is scenario 5: how much of a declared
+// rate actually arrives, on a link with capacity to spare, as the path gets
+// longer.
 //
-// The controller has no test hook, so the only way to see ackRate from outside
-// the core is its debug print. The lines go to stdout, not to the test log, so
-// this test is only meaningful under -v: look for "ACK rate" versus "Not enough
-// samples". A 100 byte exchange every 50ms is about 20 ack-eliciting packets a
-// second each way, and the floor is 50 samples over a 5 second window.
-func TestBaselineInteractiveAckRate(t *testing.T) {
-	if testing.Short() {
-		t.Skip("needs several debug print intervals to say anything")
-	}
-	t.Setenv("CHAMELEON_BRUTAL_DEBUG", "1")
-	env := harness.New(t, harness.Options{
-		Profile:   netem.RTT(50 * time.Millisecond).WithLoss(0.05).Named("rtt50ms+loss5%"),
-		Seed:      baselineSeed,
-		Bandwidth: harness.Bandwidth{BytesPerSec: baselineDeclared},
-	})
-	t.Log("stdout below carries the controller's own view of ackRate")
-	_, err := env.LatencySeries(harness.Probe{
-		Count: 300, Warmup: 3, Gap: 50 * time.Millisecond,
-		Payload: 100, Timeout: 20 * time.Second,
-	})
-	require.NoError(t, err)
-}
-
-// TestBaselineDeclaredVsAchieved is scenario 5: how much of a declared rate
-// actually arrives, on a link with capacity to spare, as the path gets longer.
-func TestBaselineDeclaredVsAchieved(t *testing.T) {
-	size := longTransfer
-	if testing.Short() {
-		size = shortTransfer
-	}
+// The BDP at 20 Mbps and 200ms is 500KB, well inside the core's 8MB stream and
+// 20MB connection windows, so a shortfall at 200ms is the controller's and not
+// flow control's.
+//
+// The 200ms row of this table turned out to be the one cell here worth
+// asserting, and it has been promoted into TestBrutalDeliversItsRateOnALongPath.
+// The rest of the curve stays a picture: the rtt0 row's achieved fraction is
+// decided by how much of a sub-second transfer is spent before the first round
+// trip sample lands, which is a property of the transfer size and not of the
+// controller, and pinning it would be pinning the bed.
+func BenchmarkBaselineDeclaredVsAchieved(b *testing.B) {
+	const size = longTransfer
 	const declared = 20e6 / 8 // 20 Mbps expressed the way the config wants it
 
-	t.Logf("declared %s (20 Mbps), no loss, %d byte echo", metrics.FormatRate(declared), size)
-	t.Logf("%-12s %-14s %-12s %-14s %-10s %-10s",
-		"rtt", "goodput", "vs declared", "wire bytes", "p50", "p99")
-	for _, rtt := range []time.Duration{0, 50 * time.Millisecond, 200 * time.Millisecond} {
-		profile := netem.Clean().Named("rtt0")
-		if rtt > 0 {
-			profile = netem.RTT(rtt)
+	for range b.N {
+		b.Logf("declared %s (20 Mbps), no loss, %d byte echo", metrics.FormatRate(declared), size)
+		b.Logf("%-12s %-14s %-12s %-14s %-10s %-10s",
+			"rtt", "goodput", "vs declared", "wire bytes", "p50", "p99")
+		for _, rtt := range []time.Duration{0, 50 * time.Millisecond, 200 * time.Millisecond} {
+			profile := netem.Clean().Named("rtt0")
+			if rtt > 0 {
+				profile = netem.RTT(rtt)
+			}
+			r := runBaseline(b, profile, harness.Bandwidth{BytesPerSec: declared}, size, 0)
+			b.Logf("%-12v %-14s %-12.3f %-14d %-10v %-10v", rtt,
+				metrics.FormatRate(r.Goodput), r.Goodput/declared, r.wireBytes(),
+				r.LatencyP5.Round(time.Millisecond), r.LatencyP9.Round(time.Millisecond))
 		}
-		r := runBaseline(t, profile, harness.Bandwidth{BytesPerSec: declared}, size, 0)
-		t.Logf("%-12v %-14s %-12.3f %-14d %-10v %-10v", rtt,
-			metrics.FormatRate(r.Goodput), r.Goodput/declared, r.wireBytes(),
-			r.LatencyP5.Round(time.Millisecond), r.LatencyP9.Round(time.Millisecond))
 	}
-	// The BDP at 20 Mbps and 200ms is 500KB, well inside the core's 8MB stream
-	// and 20MB connection windows, so a shortfall at 200ms is the controller's
-	// and not flow control's.
 }
 
-// TestBaselineSharedBottleneck is scenario 4: two flows, one bottleneck, and
-// the question of what a rate-declaring sender takes from its neighbour.
+// BenchmarkBaselineSharedBottleneck is scenario 4: two flows, one bottleneck,
+// and the question of what a rate-declaring sender takes from its neighbour.
 //
 // The bed could not ask this before: netem's token bucket lives in the pipe,
 // which is per-Conn, so two flows each got their own shaper and their own
@@ -466,24 +444,24 @@ func TestBaselineDeclaredVsAchieved(t *testing.T) {
 // The neighbour is a second chameleon client that declares no bandwidth, which
 // puts it on BBR. A real TCP competitor is not possible here and will not be:
 // the impairment layer wraps a net.PacketConn, and TCP does not go through one.
-func TestBaselineSharedBottleneck(t *testing.T) {
-	if testing.Short() {
-		t.Skip("two concurrent flows for several seconds each")
-	}
+//
+// This one stays a measurement and is the clearest case for it. What share two
+// controllers take of a shared link is a property of the pair, the buffer
+// depth, the seed and the run length, and there is no number here that could be
+// asserted without first deciding what share Brutal is entitled to -- which is
+// a policy question this project has not answered, and answering it by writing
+// down whatever today's run produced would be the exact defect these files were
+// audited for.
+func BenchmarkBaselineSharedBottleneck(b *testing.B) {
 	const linkRate = 1 << 20 // 1 MB/s shared
 	const runFor = 12 * time.Second
 
-	// Zero declares nothing, which puts the first flow on BBR too. That cell is
-	// the control: whatever share two identical controllers get is the share the
-	// bed itself hands out, and a Brutal number only means something as a
-	// departure from it.
-	for _, declared := range []uint64{0, linkRate, 2 * linkRate, 8 * linkRate} {
-		declared := declared
-		name := "brutal=" + metrics.FormatRate(float64(declared))
-		if declared == 0 {
-			name = "control-bbr-vs-bbr"
-		}
-		t.Run(name, func(t *testing.T) {
+	for range b.N {
+		// Zero declares nothing, which puts the first flow on BBR too. That cell
+		// is the control: whatever share two identical controllers get is the
+		// share the bed itself hands out, and a Brutal number only means
+		// something as a departure from it.
+		for _, declared := range []uint64{0, linkRate, 2 * linkRate, 8 * linkRate} {
 			// One bottleneck per direction: an access link's uplink and downlink
 			// do not take capacity from each other.
 			up := netem.NewBottleneck(linkRate, 100*time.Millisecond)
@@ -492,7 +470,7 @@ func TestBaselineSharedBottleneck(t *testing.T) {
 				return netem.RTT(50*time.Millisecond).WithSharedBottleneck(up, down).Named(name)
 			}
 
-			env := harness.New(t, harness.Options{
+			env := harness.New(b, harness.Options{
 				Profile:   shared("brutal-flow"),
 				Seed:      baselineSeed,
 				Bandwidth: harness.Bandwidth{BytesPerSec: declared},
@@ -500,7 +478,7 @@ func TestBaselineSharedBottleneck(t *testing.T) {
 			// Bandwidth zero on the second client means the negotiated rate is
 			// zero, which is what puts it on the configured controller (BBR).
 			peer, err := env.AddClient(shared("bbr-flow"), baselineSeed+1, harness.Options{})
-			require.NoError(t, err)
+			require.NoError(b, err)
 
 			var wg sync.WaitGroup
 			var brutalBytes, bbrBytes int64
@@ -515,8 +493,8 @@ func TestBaselineSharedBottleneck(t *testing.T) {
 				bbrBytes, bbrErr = env.TCPLoadFor(peer.Client, runFor)
 			}()
 			wg.Wait()
-			require.NoError(t, brutalErr)
-			require.NoError(t, bbrErr)
+			require.NoError(b, brutalErr)
+			require.NoError(b, bbrErr)
 
 			bs, ps := env.Ctrl.Stats(), peer.Ctrl.Stats()
 			total := brutalBytes + bbrBytes
@@ -528,16 +506,16 @@ func TestBaselineSharedBottleneck(t *testing.T) {
 			if declared == 0 {
 				first = "bbr #1"
 			}
-			t.Logf("flow 1 declared %s on a %s shared link, %v run",
+			b.Logf("flow 1 declared %s on a %s shared link, %v run",
 				metrics.FormatRate(float64(declared)), metrics.FormatRate(linkRate), runFor)
-			t.Logf("  %s: %d B back (%s), offered up %dB, dropped %.2f%%",
+			b.Logf("  %s: %d B back (%s), offered up %dB, dropped %.2f%%",
 				first, brutalBytes, metrics.FormatRate(float64(brutalBytes)/runFor.Seconds()),
 				bs.Up.InBytes, bs.Up.LossRate()*100)
-			t.Logf("  bbr:    %d B back (%s), offered up %dB, dropped %.2f%%",
+			b.Logf("  bbr:    %d B back (%s), offered up %dB, dropped %.2f%%",
 				bbrBytes, metrics.FormatRate(float64(bbrBytes)/runFor.Seconds()),
 				ps.Up.InBytes, ps.Up.LossRate()*100)
-			t.Logf("  flow 1 share %.1f%%, bottleneck up %s, down %s",
+			b.Logf("  flow 1 share %.1f%%, bottleneck up %s, down %s",
 				share*100, up.Stats(), down.Stats())
-		})
+		}
 	}
 }

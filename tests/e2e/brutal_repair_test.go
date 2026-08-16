@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -18,69 +19,205 @@ import (
 // this controller's behaviour -- the ack rate and the congestion window -- are
 // internal to the core and this module cannot import them.
 
-// TestBrutalRunsOnShortPaths is E3. A congestion window of bps x RTT x 2 with
-// no floor collapses to one or two datagrams when the round trip is a few
-// hundred microseconds, which is what a same-datacenter deployment, a loopback
-// test, and a candidate switch to a very close node all look like. Measured
-// before the floor was added, the 1 MB/s declaration hung until the idle
-// timeout on both attempts, 2 MB/s hung once and reached 47% the other time,
-// and 8 MB/s reached 15-28%.
+// shortPathRefRTT is the path each row is compared against.
 //
-// The 64 MB/s row is the control: it passed before, because its window was
-// already about 32 packets. It has to keep passing, or the floor has changed
-// something other than the cases that were broken.
+// It has to be long enough that the congestion window on it is set by the path
+// and not by the floor, or the reference carries the same defect as the thing
+// it is the reference for and the comparison says nothing. Thirty milliseconds
+// is where that starts: the window is bps x RTT x 2, so at the lowest
+// declaration on the ladder it is 60 KB, half again the 45 KB the floor asks
+// for at the datagram size the bed negotiates (32 x ~1435). It is deliberately
+// written here as a number rather than derived from the floor -- a reference
+// computed from the constant under test would shrink with it, and the whole
+// comparison would survive the constant's removal.
 //
-// That row is also the one the bed cannot always serve. The impairment layer
-// is a user-space wrapper around a loopback socket, not a network card, and
-// what it can carry depends on what else the host is doing: measured at 60
-// MB/s on an idle machine, 35 MB/s under the race detector, and 10 MB/s with
-// another build running alongside. So this row asserts monotonicity instead of
-// a fraction of the declaration -- declaring more must not deliver less -- which
-// is the actual claim ("the floor did not break the high-bandwidth case") and
-// is the same statement on any host. The rows below the bed's floor keep the
-// absolute assertion, because for them the declaration is the binding
-// constraint and the controller is what is being measured.
+// It also has to be short enough that the impairment layer can still serve it.
+// Delay in the bed is a scheduler, not a wire, and what it costs rises with the
+// bandwidth-delay product: measured, the reference leg carries 84-90% of a
+// 1 MB/s declaration and 29-59% of a 64 MB/s one, where the product is 1.9 MB.
+const shortPathRefRTT = 30 * time.Millisecond
+
+// shortPathRefFraction is how much of the declaration the reference leg must
+// carry for the comparison below it to mean anything. A collapsed reference
+// makes every ratio look good, which is how a relative assertion passes on
+// broken code.
+//
+// Measured on the ladder rows over thirty container runs -- idle, with eight busy
+// loops in a container alongside, with twenty-four, and with the floor removed,
+// which does not reach a 30ms path -- and eighteen rows on the macOS host, the
+// reference carried between 61% and 90% of its declaration. 0.45 is a quarter
+// below the worst of that, which leaves room for a slower host, and is still an
+// order of magnitude above what a starved bed produces: 200 busy loops
+// in-container calibrate the bed at 3.8 MB/s.
+//
+// It bounds how vacuous the comparison can get; it does not bound throughput,
+// and is not meant to. A regression that cost both legs the same would pass
+// here, and this is a test about the difference between two paths.
+const shortPathRefFraction = 0.45
+
+// shortPathFraction is how far behind the reference the short path may fall.
+//
+// Measured with the floor in place, the ladder rows came out between 0.93 and
+// 1.27 times their reference: minimum 0.937 over sixty-six rows in twenty-two
+// container runs -- idle, under eight busy loops and under twenty-four -- and
+// 0.934 over eighteen rows on the macOS host, whose loopback is quicker and
+// whose reference is correspondingly closer. With cwndFloorPackets cut to 1 they
+// landed between 0.585 and 0.830 on all thirty measurements, and every run
+// failed.
+//
+// 0.88 is the middle of that gap, 6% clear on each side. That 6% is a row's
+// margin, not the test's: a broken run has three rows to be caught by and needs
+// only one of them, and no run has ever been caught by fewer than all three.
+const shortPathFraction = 0.88
+
+// TestBrutalRunsOnShortPaths is E3: a short path is not a reason to deliver
+// less. A congestion window of bps x RTT x 2 with no floor collapses to one or
+// two datagrams when the round trip is a few hundred microseconds, which is
+// what a same-datacenter deployment, a loopback test, and a candidate switch to
+// a very close node all look like.
+//
+// Each row therefore measures one declaration twice, back to back on the same
+// host: once over shortPathRefRTT and once over loopback. The claim is a
+// comparison between two paths, so the assertion is one too. A fraction of the
+// declaration is not, and cannot be made into one:
+//
+// What this bed delivers at a fixed declaration is set by the pacer's burst cap
+// and by how often the container's send loop gets to run, not by the path. The
+// cap is max(2ms x bps, 10 datagrams), in the pacer the core installs under this
+// controller, so a send loop that wakes every few milliseconds can only ever
+// emit one cap per wake.
+// Measured, with nothing else changed, raising that multiplier from 2 to 16
+// moved an 8 MB/s declaration from 65% to 94% of the declaration and a 64 MB/s
+// one from 75% to 92%. It is the same story from the other end: the 8 MB/s
+// declaration reads 65.6%, 60.3% and 59.9% at round trips of 0, 5 and 20 ms. A
+// shortfall that does not move when the path length changes by three orders of
+// magnitude is not a short-path problem, and a short-path problem is the only
+// thing this test claims to measure. The "bps > 0.7 x declared" this replaces
+// was reading the host's timer granularity: measured sixteen times in this
+// container, that row cleared 70% once, and the same row on the macOS host reads
+// 91.7% and 92.6%.
+//
+// The ladder is the declarations whose window the floor is what saves. The
+// window is sized from max(smoothed RTT, 1ms) -- quic-go's pacing granularity,
+// below which the round trip describes the scheduler rather than the path -- so
+// on loopback it is 2 x bps x 1ms: 1.5, 2.9 and 5.8 datagrams at 1, 2 and 4
+// MB/s, against the 32 the floor asks for.
+//
+// 8 MB/s was on this ladder and is not any more. At 8 MB/s the burst cap above
+// has overtaken the ten datagrams it is the maximum of (2ms x 8 MB/s is 16 KB
+// against 10 x ~1435), so the cap binds before the window does and the row
+// measures the wake period instead. It shows: with the floor removed the three
+// remaining rows land at 0.585-0.830 of their reference, while 8 MB/s came back
+// at 0.766, 0.938 and 0.981 -- it would have reported the floor intact on two
+// runs out of three. The row had stopped discriminating; keeping it would have
+// been three seconds spent asserting the host was not busy.
+//
+// controlMinReference is the least the control row's reference leg may carry
+// before its ratio stops meaning anything. Written out rather than derived from
+// the declaration: the declaration is unreachable on every bed measured here,
+// which is the whole reason this row is exempt from the fraction the ladder
+// rows use.
+const controlMinReference = 500 << 10
+
+// 64 MB/s is the control. Its window on loopback is 93 datagrams before any
+// floor applies, so the floor cannot be what carries it, and it has to keep
+// passing or the floor has changed a case that was not broken. It is the one
+// row without the reference-fraction assertion, because there is no declaration
+// that both clears the floor and stays inside what every bed can carry: the
+// window only clears 32 datagrams above about 23 MB/s, and the macOS loopback
+// bed saturates around 10 MB/s whatever is declared (measured, at declarations
+// of 16, 24, 32, 48 and 64 MB/s it returned 8.2, 4.4, 9.9, 10.4 and 10.3 MB/s).
+// A fraction-of-declaration floor on this row would be an assertion about the
+// host's socket throughput. What is left on it is the comparison, which is what
+// the row is for. It can pass vacuously if the bed collapses on both legs at
+// once, and that is the price of having a control row at all.
+//
+// Every row measures both of its own legs, so each of these assertions holds
+// when the row is run alone under a -run filter.
 func TestBrutalRunsOnShortPaths(t *testing.T) {
 	if testing.Short() {
-		t.Skip("four transfers, and the failure mode under test is an idle timeout")
+		t.Skip("eight transfers, and the failure mode under test is an idle timeout")
 	}
-	profile := netem.Loss(0.05)
-	// The largest throughput any lower declaration reached, which is a floor
-	// under what the bed demonstrably carries on this host right now.
-	var bestBelow float64
-	for _, declared := range []uint64{1 << 20, 2 << 20, 8 << 20, 64 << 20} {
-		declared := declared
-		t.Run(metrics.FormatRate(float64(declared)), func(t *testing.T) {
-			// Scale the transfer with the declaration so that every row
-			// measures a comparable stretch of steady state. Two megabytes at
-			// 64 MB/s is thirty milliseconds, which is short enough that the
-			// result is decided by where the first round trip sample happens to
-			// land -- before it, the window is sized from quic-go's 100ms
-			// default and is effectively unbounded; after it, from the real
-			// path. Measured at 2MB, that row swung between 51% and 96% of the
-			// declaration across five runs while the 1 and 2 MB/s rows, which
-			// take a whole second, held at 92% every time.
-			size := max(2<<20, int(declared/4))
-			env := harness.New(t, harness.Options{
-				Profile:        profile,
-				Seed:           7,
-				Bandwidth:      harness.Bandwidth{BytesPerSec: declared},
-				MaxIdleTimeout: 4 * time.Second,
-			})
-			bps, err := env.TCPThroughput(size, 25*time.Second)
-			require.NoError(t, err, "the transfer must complete: a window of one datagram stalls on every loss")
-			t.Logf("declared %s: %s, %.0f%% of the declaration",
-				metrics.FormatRate(float64(declared)), metrics.FormatRate(bps), bps/float64(declared)*100)
-			if declared >= 64<<20 {
-				assert.GreaterOrEqual(t, bps, bestBelow,
-					"the highest declaration delivered less than a lower one: the floor has changed a case that was not broken")
-				return
+	for _, row := range []struct {
+		declared uint64
+		// control marks the row the floor never reaches, which is therefore
+		// also the row no bed can be held to a fraction of.
+		control bool
+	}{
+		{declared: 1 << 20},
+		{declared: 2 << 20},
+		{declared: 4 << 20},
+		{declared: 64 << 20, control: true},
+	} {
+		t.Run(metrics.FormatRate(float64(row.declared)), func(t *testing.T) {
+			// One second of the declaration on each leg. The shortfall being
+			// measured is a rate and not a startup cost -- at 8 MB/s the same
+			// figure comes back at 65%, 67%, 65% and 65% for transfers of 1, 4,
+			// 16 and 32 MB -- but a leg has to outlast the first round trip
+			// sample all the same: before it, the window is sized from quic-go's
+			// 100ms default and is effectively unbounded.
+			//
+			// The cap is for the bed rather than the controller. A second of a
+			// 64 MB/s declaration is 64 MB, and a bed that carries 4.7 MB/s of
+			// it -- the macOS host's figure on the reference path -- would spend
+			// fourteen seconds on that one leg, most of the transfer deadline.
+			// Half of it is still two thirds of a second of steady state
+			// wherever the bed does keep up.
+			size := min(int(row.declared), 32<<20)
+			reference := shortPathLeg(t, row.declared, shortPathRefRTT, size)
+			shortPath := shortPathLeg(t, row.declared, 0, size)
+			t.Logf("declared %s: %s over a %v path, %s over loopback -- %.0f%% and %.0f%% of the declaration, ratio %.3f",
+				metrics.FormatRate(float64(row.declared)), metrics.FormatRate(reference), shortPathRefRTT,
+				metrics.FormatRate(shortPath), reference/float64(row.declared)*100,
+				shortPath/float64(row.declared)*100, shortPath/reference)
+
+			if row.control {
+				// The control row cannot use a fraction of its declaration: no
+				// bed here carries 64 MB/s, and the macOS loopback saturates
+				// near 10. What it can require is that the reference leg moved
+				// enough to be a measurement at all, so that a bed collapsing
+				// on both legs at once fails the row instead of passing it with
+				// a ratio of one. The bound is an order of magnitude below the
+				// slowest bed measured (4.4 MB/s on the macOS host), because it
+				// is guarding against collapse, not grading the bed.
+				assert.Greater(t, reference, float64(controlMinReference),
+					"the reference leg carried %s, too little for the ratio below to mean anything",
+					metrics.FormatRate(reference))
+			} else {
+				assert.Greater(t, reference, shortPathRefFraction*float64(row.declared),
+					"the reference path carried too little to be a reference: this is the bed failing, not the controller")
 			}
-			assert.Greater(t, bps, 0.7*float64(declared),
-				"a short path is not a reason to deliver less than the declared rate")
-			bestBelow = max(bestBelow, bps)
+			assert.GreaterOrEqual(t, shortPath, shortPathFraction*reference,
+				"the same declaration delivered less over loopback than over a %v path: a short path is not a reason to deliver less", shortPathRefRTT)
 		})
 	}
+}
+
+// shortPathLeg is one declaration measured over one path length.
+func shortPathLeg(t *testing.T, declared uint64, rtt time.Duration, size int) float64 {
+	t.Helper()
+	profile := netem.Loss(0.05).WithRTT(rtt).Named(fmt.Sprintf("loss5%%+rtt%v", rtt))
+	env := harness.New(t, harness.Options{
+		Profile:   profile,
+		Seed:      7,
+		Bandwidth: harness.Bandwidth{BytesPerSec: declared},
+		// The failure mode this test was written for is a window of one
+		// datagram stalling on every loss until the connection times out, so
+		// the timeout has to be short enough to be reached inside the
+		// transfer's own deadline. Four seconds is the minimum the core
+		// accepts.
+		//
+		// It is kept as a guard rather than as the thing being measured. Since
+		// windowRTT gained its one millisecond floor, removing cwndFloorPackets
+		// no longer hangs anything: measured over thirty rows with the floor
+		// cut to 1, every transfer completed, the worst of them at 46% of the
+		// declaration. What is left of the defect is a rate, which is what the
+		// comparison below measures.
+		MaxIdleTimeout: 4 * time.Second,
+	})
+	bps, err := env.TCPThroughput(size, 25*time.Second)
+	require.NoError(t, err, "the transfer must complete: a window of one datagram stalls on every loss")
+	return bps
 }
 
 // TestBrutalSurvivesAPathDelayRise is the regression that decided how far the
