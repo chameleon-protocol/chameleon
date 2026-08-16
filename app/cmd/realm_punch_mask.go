@@ -41,12 +41,11 @@ var errRealmPunchNeedsV2 = errors.New(
 // relays punch metadata verbatim, so anything derived from that metadata is a
 // key the relay also has.
 //
-// Only salamander v2 carries a realm, so v1 and gecko derive with an empty one.
-// That means two deployments picking the same v1 password share a punch mask —
-// exactly the weakness those obfuscators already have at their own layer, so
-// punching does not add one. They are accepted rather than rejected because
-// their output is not clear QUIC either; that is an argument, not a
-// measurement, and the measurement covers salamander v2 only.
+// Salamander v2 is the only type accepted, because it is the only one whose
+// traffic was ever captured and a punch packet hides by taking the shape of the
+// flow beside it. The others were accepted once, on the argument that their
+// output is not clear QUIC either; that argument is what errRealmPunchNeedsV2
+// records rejecting.
 func realmPunchMask(obfsType, salamanderV2Password, salamanderV2Realm string) (realm.PunchMask, error) {
 	// Matched exactly as wrapObfs dispatches, so the key exists when — and only
 	// when — an obfuscator actually engages.
