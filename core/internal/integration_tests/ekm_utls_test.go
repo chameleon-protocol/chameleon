@@ -48,10 +48,10 @@ func ekmUTLSCert(t *testing.T) tls.Certificate {
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "spike"},
+		Subject:      pkix.Name{CommonName: "ekm-test"},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(time.Hour),
-		DNSNames:     []string{"spike"},
+		DNSNames:     []string{"ekm-test"},
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
@@ -106,7 +106,7 @@ func TestEKMAcrossTLSStacks(t *testing.T) {
 	}})
 	cli := utls.UQUICClient(&utls.QUICConfig{TLSConfig: &utls.Config{
 		InsecureSkipVerify: true,
-		ServerName:         "spike",
+		ServerName:         "ekm-test",
 		NextProtos:         []string{"h3"},
 		MinVersion:         utls.VersionTLS13,
 		MaxVersion:         utls.VersionTLS13,

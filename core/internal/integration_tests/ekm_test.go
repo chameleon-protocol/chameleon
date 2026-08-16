@@ -44,7 +44,7 @@ const (
 	// requires exporter labels to be unique per use; the value is carried here
 	// verbatim so the tests measure the real thing.
 	ekmLabel = "EXPORTER-chameleon-disco-v1"
-	ekmALPN  = "chameleon-ekm-spike"
+	ekmALPN  = "chameleon-ekm-test"
 	ekmLen   = 32
 
 	// ekmTooEarly is the fork's own refusal. crypto/tls has a refusal of its own
@@ -184,7 +184,7 @@ func (c *signallingCache) Put(key string, cs *tls.ClientSessionState) {
 	}
 }
 
-// ekmClient dials the spike server. Each dial gets its own PacketConn and
+// ekmClient dials the test server. Each dial gets its own PacketConn and
 // Transport, which is what a chameleon reconnect does (client.connect() builds
 // both from scratch every time).
 func ekmClient(t *testing.T, s *ekmServer, tlsConf *tls.Config, parrot bool) (*quic.Transport, *quic.Conn) {
@@ -238,7 +238,7 @@ func roundTrip(t *testing.T, conn *quic.Conn) {
 	defer cancel()
 	str, err := conn.OpenStreamSync(ctx)
 	require.NoError(t, err)
-	payload := []byte("disco spike payload")
+	payload := []byte("disco test payload")
 	_, err = str.Write(payload)
 	require.NoError(t, err)
 	buf := make([]byte, len(payload))
@@ -302,7 +302,7 @@ func TestEKMResumptionAndZeroRTT(t *testing.T) {
 		// ServerName, and under QUIC there is no net.Conn to fall back to a
 		// remote address. With ServerName empty the cache key is "" and tickets
 		// are silently dropped, i.e. resumption never happens at all.
-		ServerName: "chameleon-ekm-spike",
+		ServerName: "chameleon-ekm-test",
 	}
 
 	_, cConn1 := ekmClient(t, s, clientTLS, false)
